@@ -1,6 +1,6 @@
 import os
-from fastapi import FastAPI, Request, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, Header, HTTPException, Depends, Form
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from telegram import Bot
 from dotenv import load_dotenv
@@ -11,9 +11,15 @@ from slowapi.util import get_remote_address
 from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from sqlalchemy.orm import Session
+from database import Base, engine, SessionLocal
+import models, auth
+
+
 
 templates = Jinja2Templates(directory="templates")
+# Create DB tables (simple approach; use Alembic later)
+Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 # В продакшене лучше отдавать статику через nginx, чтобы снять нагрузку с Python.
@@ -22,7 +28,10 @@ app = FastAPI()
 
 
 # Загрузка переменных окружения
-load_dotenv()
+# Load .env locally if present (optional)
+from dotenv import load_dotenv
+if os.path.exists(".env"):
+    load_dotenv()
 
 BOT_B_TOKEN = os.getenv("BOT_B_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -42,11 +51,34 @@ bot = Bot(token=BOT_B_TOKEN)
 # Логирование
 logger.add("logs/bot.log", rotation="1 day", retention="7 days", level="INFO")
 
+
 # Модель запроса
 class MessageRequest(BaseModel):
     message: str
 
-@app.get("/")
+
+# --- DB dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# --- Helper: get current user from access cookie
+def get_current_username(request: Request):
+    token = request.cookies.get("access_token")
+    if not token:
+        return None
+    try:
+        payload = auth.decode_access_token(token)
+        return payload.get("sub")
+    except Exception:
+        return None
+
+
+# --- Routes
+@app.get("/test")
 def read_root():
     return {"message": "Hello from FastAPI!"}
 
@@ -96,46 +128,55 @@ async def receive_message(
         return JSONResponse(content={"status": message}, status_code=200)
 
 # страницы интерфейса (как у TacticalRMM)
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    user = get_current_username(request)
+    return templates.TemplateResponse("index.html", {"request": request, "user": user})
 
-# Главная страница / Dashboard 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    # Здесь будет обращение к backend TacticalRMM API
-    stats = {"total_agents": 0}
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request, "stats": stats}
-    )
-
-
-# Список агентов 
-@app.get("/agents", response_class=HTMLResponse)
-async def agents_page(request: Request):
-    agents = []  # <- сюда позже подтянем API TacticalRMM
-    return templates.TemplateResponse(
-        "agents.html",
-        {"request": request, "agents": agents}
-    )
-
-
-#  Страница агента
-@app.get("/agents/{agent_id}", response_class=HTMLResponse)
-async def agent_details(request: Request, agent_id: str):
-    agent = {
-        "id": agent_id,
-        "hostname": "example-host",
-        "platform": "linux",
-        "cpu_count": 4,
-        "memory_total": 8192,
-    }
-    return templates.TemplateResponse(
-        "agent.html",
-        {"request": request, "agent": agent, "result": None}
-    )
-
-
-# Login
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
+def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
+@app.post("/auth")
+def authenticate(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user or not auth.verify_password(password, user.hashed_password):
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid credentials"})
+    access = auth.create_access_token(user.username)
+    refresh = auth.create_refresh_token(user.username)
+    response = RedirectResponse(url="/dashboard", status_code=302)
+    # httponly, secure should be enabled in production (secure requires https)
+    response.set_cookie("access_token", access, httponly=True, secure=True, samesite="lax")
+    response.set_cookie("refresh_token", refresh, httponly=True, secure=True, samesite="lax")
+    return response
+
+@app.get("/refresh")
+def refresh(request: Request):
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        return RedirectResponse("/login")
+    try:
+        payload = auth.decode_refresh_token(refresh_token)
+        username = payload.get("sub")
+        new_access = auth.create_access_token(username)
+        resp = RedirectResponse("/dashboard")
+        resp.set_cookie("access_token", new_access, httponly=True, secure=True, samesite="lax")
+        return resp
+    except Exception:
+        return RedirectResponse("/login")
+
+@app.get("/logout")
+def logout():
+    resp = RedirectResponse("/login")
+    resp.delete_cookie("access_token")
+    resp.delete_cookie("refresh_token")
+    return resp
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request, db: Session = Depends(get_db)):
+    username = get_current_username(request)
+    if not username:
+        return RedirectResponse("/login")
+    # Optionally load user from DB (role, etc.)
+    user = db.query(models.User).filter(models.User.username == username).first()
+    return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})

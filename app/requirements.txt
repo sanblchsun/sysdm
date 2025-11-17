@@ -6,3 +6,9 @@ loguru==0.7.3
 slowapi==0.1.9
 jinja2
 pydantic
+sqlalchemy
+psycopg2-binary
+PyJWT[crypto]
+passlib[bcrypt]
+python-multipart
+argon2-cffi

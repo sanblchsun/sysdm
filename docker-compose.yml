@@ -5,6 +5,23 @@ services:
     build: .
     container_name: fastapi_app
     restart: always
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/fastapi_db
+      SECRET_KEY: "qwqwqwqwqwererere"
+      REFRESH_SECRET_KEY: "ewrwetwgergefg43534"
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fastapi_db
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
 
   nginx:
     image: nginx:latest
@@ -25,3 +42,7 @@ services:
     volumes:
       - ./certbot/www:/var/www/certbot
       - ./certbot/conf:/etc/letsencrypt
+
+
+volumes:
+  db_data:
