@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Agents{% endblock %}
+
+{% block content %}
+<h1>Agents</h1>
+
+{% if agents|length == 0 %}
+<p>No agents available.</p>
+{% else %}
+<table>
+    <tr>
+        <th>ID</th>
+        <th>Hostname</th>
+        <th>Platform</th>
+        <th></th>
+    </tr>
+
+    {% for agent in agents %}
+    <tr>
+        <td>{{ agent.id }}</td>
+        <td>{{ agent.hostname }}</td>
+        <td>{{ agent.platform }}</td>
+        <td><a href="/agents/{{ agent.id }}">Open</a></td>
+    </tr>
+    {% endfor %}
+</table>
+{% endif %}
+{% endblock %}

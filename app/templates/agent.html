@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Agent {{ agent.id }}{% endblock %}
+
+{% block content %}
+<h1>Agent {{ agent.id }}</h1>
+
+<div class="card">
+    <p><b>Hostname:</b> {{ agent.hostname }}</p>
+    <p><b>Platform:</b> {{ agent.platform }}</p>
+    <p><b>CPU cores:</b> {{ agent.cpu_count }}</p>
+    <p><b>RAM:</b> {{ agent.memory_total }} MB</p>
+</div>
+
+{% if result %}
+<h3>Command Output:</h3>
+<pre>{{ result }}</pre>
+{% endif %}
+{% endblock %}
