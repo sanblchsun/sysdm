@@ -1,14 +1,29 @@
-# app/database.py
 import os
+import time
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import OperationalError
+from loguru import logger
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@db:5432/fastapi_db"
-)
 
-# create_engine: для Postgres не нужны connect_args
-engine = create_engine(DATABASE_URL, future=True)
+logger.info("===== LOADED ENVIRONMENT VARIABLES app/database.py =====")
+logger.info(f"DATABASE_URL={os.getenv('DATABASE_URL')}")
+logger.info(f"DB_HOST={os.getenv('DB_HOST')}")
+logger.info(f"DB_PORT={os.getenv('DB_PORT')}")
+
+
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/fastapi_db")
+
+engine = None
+while engine is None:
+    try:
+        engine = create_engine(DATABASE_URL, echo=True, future=True)
+        # Пробуем соединиться с базой
+        with engine.connect() as conn:
+            print("✅ Connected to Postgres!")
+    except OperationalError as e:
+        print(f"❌ Postgres is unavailable, retrying in 2 seconds... Error: {e}")
+        time.sleep(2)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()

@@ -1,11 +1,9 @@
-# app/auth.py
 import os
 from datetime import datetime, timedelta
 import jwt
 from passlib.context import CryptContext
 from typing import Optional
 
-# Настраиваем секреты через env
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me-super-secret")
 REFRESH_SECRET_KEY = os.getenv("REFRESH_SECRET_KEY", "change-me-refresh-secret")
 ALGORITHM = "HS256"

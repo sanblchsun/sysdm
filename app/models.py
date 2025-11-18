@@ -1,6 +1,5 @@
-# app/models.py
-from sqlalchemy import Column, Integer, String, Boolean
-from database import Base
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, func
+from .database import Base
 
 class User(Base):
     __tablename__ = "users"
@@ -9,3 +8,13 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     role = Column(String(50), default="user", nullable=False)
     is_active = Column(Boolean, default=True)
+
+class Agent(Base):
+    __tablename__ = "agents"
+    id = Column(Integer, primary_key=True, index=True)
+    hostname = Column(String, nullable=False, index=True)
+    platform = Column(String, nullable=True)
+    agent_uuid = Column(String, unique=True, nullable=False, index=True)
+    last_seen = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    inventory = Column(Text, nullable=True)
+    is_online = Column(Boolean, default=False)

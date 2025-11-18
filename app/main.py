@@ -13,15 +13,17 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from database import Base, engine, SessionLocal
-import models, auth
-
+import models, auth, crud
+from routers import auth_router, agents_router
 
 
 templates = Jinja2Templates(directory="templates")
 # Create DB tables (simple approach; use Alembic later)
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
-
+# include routers
+app.include_router(auth_router.router)
+app.include_router(agents_router.router)
 # В продакшене лучше отдавать статику через nginx, чтобы снять нагрузку с Python.
 # app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -37,6 +39,21 @@ BOT_B_TOKEN = os.getenv("BOT_B_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
 MAX_MESSAGE_LENGTH = 1000
+
+logger.info("===== LOADED ENVIRONMENT VARIABLES =====")
+logger.info(f"DATABASE_URL={os.getenv('DATABASE_URL')}")
+logger.info(f"DB_HOST={os.getenv('DB_HOST')}")
+logger.info(f"DB_PORT={os.getenv('DB_PORT')}")
+logger.info(f"POSTGRES_USER={os.getenv('POSTGRES_USER')}")
+logger.info(f"POSTGRES_PASSWORD={'****' if os.getenv('POSTGRES_PASSWORD') else None}")
+logger.info(f"POSTGRES_DB={os.getenv('POSTGRES_DB')}")
+logger.info(f"SECRET_KEY={'****' if os.getenv('SECRET_KEY') else None}")
+logger.info(f"REFRESH_SECRET_KEY={'****' if os.getenv('REFRESH_SECRET_KEY') else None}")
+logger.info(f"ACCESS_TOKEN_EXPIRE_MINUTES={os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES')}")
+logger.info(f"REFRESH_TOKEN_EXPIRE_DAYS={os.getenv('REFRESH_TOKEN_EXPIRE_DAYS')}")
+logger.info("======================================")
+
+
 
 if not BOT_B_TOKEN or not CHAT_ID or not API_KEY:
     raise EnvironmentError("BOT_B_TOKEN, CHAT_ID или API_KEY отсутствуют в .env")
@@ -65,12 +82,14 @@ def get_db():
     finally:
         db.close()
 
+
 # --- Helper: get current user from access cookie
 def get_current_username(request: Request):
     token = request.cookies.get("access_token")
     if not token:
         return None
     try:
+        from . import auth
         payload = auth.decode_access_token(token)
         return payload.get("sub")
     except Exception:
@@ -133,50 +152,10 @@ def index(request: Request):
     user = get_current_username(request)
     return templates.TemplateResponse("index.html", {"request": request, "user": user})
 
-@app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
-
-@app.post("/auth")
-def authenticate(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if not user or not auth.verify_password(password, user.hashed_password):
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid credentials"})
-    access = auth.create_access_token(user.username)
-    refresh = auth.create_refresh_token(user.username)
-    response = RedirectResponse(url="/dashboard", status_code=302)
-    # httponly, secure should be enabled in production (secure requires https)
-    response.set_cookie("access_token", access, httponly=True, secure=True, samesite="lax")
-    response.set_cookie("refresh_token", refresh, httponly=True, secure=True, samesite="lax")
-    return response
-
-@app.get("/refresh")
-def refresh(request: Request):
-    refresh_token = request.cookies.get("refresh_token")
-    if not refresh_token:
-        return RedirectResponse("/login")
-    try:
-        payload = auth.decode_refresh_token(refresh_token)
-        username = payload.get("sub")
-        new_access = auth.create_access_token(username)
-        resp = RedirectResponse("/dashboard")
-        resp.set_cookie("access_token", new_access, httponly=True, secure=True, samesite="lax")
-        return resp
-    except Exception:
-        return RedirectResponse("/login")
-
-@app.get("/logout")
-def logout():
-    resp = RedirectResponse("/login")
-    resp.delete_cookie("access_token")
-    resp.delete_cookie("refresh_token")
-    return resp
-
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(request: Request, db: Session = Depends(get_db)):
+def dashboard(request: Request, db = Depends(get_db)):
     username = get_current_username(request)
     if not username:
         return RedirectResponse("/login")
-    # Optionally load user from DB (role, etc.)
     user = db.query(models.User).filter(models.User.username == username).first()
     return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
