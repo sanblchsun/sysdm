@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from database import engine, SessionLocal
+from database import engine, SessionLocal, Base
 import models
 from routers import auth_router, agents_router
 
@@ -20,6 +20,7 @@ from routers import auth_router, agents_router
 templates = Jinja2Templates(directory="templates")
 # Create DB tables (simple approach; use Alembic later)
 app = FastAPI()
+Base.metadata.create_all(bind=engine)
 # include routers
 app.include_router(auth_router.router)
 app.include_router(agents_router.router)
