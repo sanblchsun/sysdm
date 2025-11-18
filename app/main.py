@@ -3,7 +3,7 @@ from fastapi import FastAPI, Request, Header, HTTPException, Depends, Form
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from telegram import Bot
-from dotenv import load_dotenv
+from environs import Env
 from loguru import logger
 # from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -12,14 +12,13 @@ from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from database import Base, engine, SessionLocal
-import models, auth, crud
+from database import engine, SessionLocal
+import models
 from routers import auth_router, agents_router
 
 
 templates = Jinja2Templates(directory="templates")
 # Create DB tables (simple approach; use Alembic later)
-Base.metadata.create_all(bind=engine)
 app = FastAPI()
 # include routers
 app.include_router(auth_router.router)
@@ -31,26 +30,25 @@ app.include_router(agents_router.router)
 
 # Загрузка переменных окружения
 # Load .env locally if present (optional)
-from dotenv import load_dotenv
-if os.path.exists(".env"):
-    load_dotenv()
+env = Env()
+env.read_env()
 
-BOT_B_TOKEN = os.getenv("BOT_B_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-API_KEY = os.getenv("API_KEY")
+BOT_B_TOKEN = env.str("BOT_B_TOKEN")
+CHAT_ID = env.str("CHAT_ID")
+API_KEY = env.str("API_KEY")
 MAX_MESSAGE_LENGTH = 1000
 
 logger.info("===== LOADED ENVIRONMENT VARIABLES =====")
-logger.info(f"DATABASE_URL={os.getenv('DATABASE_URL')}")
-logger.info(f"DB_HOST={os.getenv('DB_HOST')}")
-logger.info(f"DB_PORT={os.getenv('DB_PORT')}")
-logger.info(f"POSTGRES_USER={os.getenv('POSTGRES_USER')}")
-logger.info(f"POSTGRES_PASSWORD={'****' if os.getenv('POSTGRES_PASSWORD') else None}")
-logger.info(f"POSTGRES_DB={os.getenv('POSTGRES_DB')}")
-logger.info(f"SECRET_KEY={'****' if os.getenv('SECRET_KEY') else None}")
-logger.info(f"REFRESH_SECRET_KEY={'****' if os.getenv('REFRESH_SECRET_KEY') else None}")
-logger.info(f"ACCESS_TOKEN_EXPIRE_MINUTES={os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES')}")
-logger.info(f"REFRESH_TOKEN_EXPIRE_DAYS={os.getenv('REFRESH_TOKEN_EXPIRE_DAYS')}")
+logger.info(f"DATABASE_URL={env.str('DATABASE_URL')}")
+logger.info(f"DB_HOST={env.str('DB_HOST')}")
+logger.info(f"DB_PORT={env.str('DB_PORT')}")
+logger.info(f"POSTGRES_USER={env.str('POSTGRES_USER')}")
+logger.info(f"POSTGRES_PASSWORD={'****' if env.str('POSTGRES_PASSWORD') else None}")
+logger.info(f"POSTGRES_DB={env.str('POSTGRES_DB')}")
+logger.info(f"SECRET_KEY={'****' if env.str('SECRET_KEY') else None}")
+logger.info(f"REFRESH_SECRET_KEY={'****' if env.str('REFRESH_SECRET_KEY') else None}")
+logger.info(f"ACCESS_TOKEN_EXPIRE_MINUTES={env.str('ACCESS_TOKEN_EXPIRE_MINUTES')}")
+logger.info(f"REFRESH_TOKEN_EXPIRE_DAYS={env.str('REFRESH_TOKEN_EXPIRE_DAYS')}")
 logger.info("======================================")
 
 
@@ -120,7 +118,7 @@ async def receive_message(
 
     message = payload.message.strip()
     if not message:
-        logger.warning(f"[{timestamp}] ❌ Пустое сообщение. Запрос от IP: {ip}")
+        logger.warning(f"[{timestamp}] ❌ Пустое сообщение. Запрос от IP:")
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     if len(message) > MAX_MESSAGE_LENGTH:

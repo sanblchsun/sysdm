@@ -2,3 +2,7 @@
 *.ini
 /certbot/*/
 *.log
+.idea/
+__pycache__/
+
+
