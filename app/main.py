@@ -12,15 +12,14 @@ from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from database import engine, SessionLocal, Base
+from database import SessionLocal
 import models
 from routers import auth_router, agents_router
 
 
 templates = Jinja2Templates(directory="templates")
-# Create DB tables (simple approach; use Alembic later)
+
 app = FastAPI()
-Base.metadata.create_all(bind=engine)
 # include routers
 app.include_router(auth_router.router)
 app.include_router(agents_router.router)
@@ -38,21 +37,6 @@ BOT_B_TOKEN = env.str("BOT_B_TOKEN")
 CHAT_ID = env.str("CHAT_ID")
 API_KEY = env.str("API_KEY")
 MAX_MESSAGE_LENGTH = 1000
-
-logger.info("===== LOADED ENVIRONMENT VARIABLES =====")
-logger.info(f"DATABASE_URL={env.str('DATABASE_URL')}")
-logger.info(f"DB_HOST={env.str('DB_HOST')}")
-logger.info(f"DB_PORT={env.str('DB_PORT')}")
-logger.info(f"POSTGRES_USER={env.str('POSTGRES_USER')}")
-logger.info(f"POSTGRES_PASSWORD={'****' if env.str('POSTGRES_PASSWORD') else None}")
-logger.info(f"POSTGRES_DB={env.str('POSTGRES_DB')}")
-logger.info(f"SECRET_KEY={'****' if env.str('SECRET_KEY') else None}")
-logger.info(f"REFRESH_SECRET_KEY={'****' if env.str('REFRESH_SECRET_KEY') else None}")
-logger.info(f"ACCESS_TOKEN_EXPIRE_MINUTES={env.str('ACCESS_TOKEN_EXPIRE_MINUTES')}")
-logger.info(f"REFRESH_TOKEN_EXPIRE_DAYS={env.str('REFRESH_TOKEN_EXPIRE_DAYS')}")
-logger.info("======================================")
-
-
 
 if not BOT_B_TOKEN or not CHAT_ID or not API_KEY:
     raise EnvironmentError("BOT_B_TOKEN, CHAT_ID или API_KEY отсутствуют в .env")
@@ -88,7 +72,7 @@ def get_current_username(request: Request):
     if not token:
         return None
     try:
-        from . import auth
+        from app import auth
         payload = auth.decode_access_token(token)
         return payload.get("sub")
     except Exception:
@@ -156,5 +140,5 @@ def dashboard(request: Request, db = Depends(get_db)):
     username = get_current_username(request)
     if not username:
         return RedirectResponse("/login")
-    user = db.query(models.User).filter(models.User.username == username).first()
+    user = db.query(models.User).filter(username == models.User.username).first()
     return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
