@@ -20,5 +20,7 @@ class AgentOut(BaseModel):
     last_seen: Optional[datetime]
     is_online: bool
     inventory: Optional[dict] = None
-    class Config:
-        orm_mode = True
+
+    model_config = {
+        "from_attributes": True
+    }

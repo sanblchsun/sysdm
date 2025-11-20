@@ -12,20 +12,21 @@ from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from app.database import SessionLocal
+from app.database import SessionLocal, Base, engine
 from app import models
 from app.routers import auth_router, agents_router
 
 
-templates = Jinja2Templates(directory="app/templates")
 
 app = FastAPI()
+# В продакшене лучше отдавать статику через nginx, чтобы снять нагрузку с Python.
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # include routers
 app.include_router(auth_router.router)
 app.include_router(agents_router.router)
-# В продакшене лучше отдавать статику через nginx, чтобы снять нагрузку с Python.
-# app.mount("/static", StaticFiles(directory="static"), name="static")
+Base.metadata.create_all(bind=engine)
 
+templates = Jinja2Templates(directory="app/templates")
 
 
 # Загрузка переменных окружения
