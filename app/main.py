@@ -12,12 +12,12 @@ from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from database import SessionLocal
-import models
-from routers import auth_router, agents_router
+from app.database import SessionLocal
+from app import models
+from app.routers import auth_router, agents_router
 
 
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory="app/templates")
 
 app = FastAPI()
 # include routers
@@ -136,7 +136,7 @@ def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "user": user})
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(request: Request, db = Depends(get_db)):
+def dashboard(request: Request, db = Depends(get_db), models=None):
     username = get_current_username(request)
     if not username:
         return RedirectResponse("/login")
