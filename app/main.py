@@ -19,6 +19,7 @@ from app.routers import auth_router, agents_router
 
 
 app = FastAPI()
+templates = Jinja2Templates(directory="app/templates")
 # В продакшене лучше отдавать статику через nginx, чтобы снять нагрузку с Python.
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # include routers
@@ -26,7 +27,6 @@ app.include_router(auth_router.router)
 app.include_router(agents_router.router)
 Base.metadata.create_all(bind=engine)
 
-templates = Jinja2Templates(directory="app/templates")
 
 
 # Загрузка переменных окружения

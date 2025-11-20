@@ -5,14 +5,24 @@ from fastapi.templating import Jinja2Templates
 from app import crud, auth
 from fastapi import APIRouter, Request, Depends, Form
 
+templates = Jinja2Templates(directory="app/templates")
+
 router = APIRouter(
-    prefix="/auth",
     tags=["auth"]
 )
 
-@router.get("/login")
-def login_page():
-    return {"message": "login page"}
+# def get_db():
+#     db = SessionLocal()
+#     try:
+#         yield db
+#     finally:
+#         db.close()
+
+@router.get("/login", response_class=HTMLResponse)
+def login_get(request: Request):
+    # return {"message": "user logging in"}
+    return templates.TemplateResponse("login.html", {"request": request})
+
 
 @router.post("/login")
 def login():
@@ -22,18 +32,7 @@ def login():
 def logout():
     return {"message": "logout"}
 
-templates = Jinja2Templates(directory="app/templates")
-#
-# def get_db():
-#     db = SessionLocal()
-#     try:
-#         yield db
-#     finally:
-#         db.close()
-#
-# @router.get("/login", response_class=HTMLResponse)
-# def login_get(request: Request):
-#     return templates.TemplateResponse("login.html", {"request": request})
+
 #
 # @router.post("/auth")
 # def login_post(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):

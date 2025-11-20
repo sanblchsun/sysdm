@@ -5,9 +5,9 @@ from app import crud, schemas
 from app.database import SessionLocal
 from fastapi.templating import Jinja2Templates
 
+templates = Jinja2Templates(directory="app/templates")
 
 router = APIRouter(
-    prefix="/agents",
     tags=["agents"]
 )
 
@@ -19,7 +19,6 @@ def agents_page():
 def get_agent(agent_id: int):
     return {"agent_id": agent_id}
 
-templates = Jinja2Templates(directory="app/templates")
 #
 # def get_db():
 #     db = SessionLocal()
