@@ -32,8 +32,9 @@ def login_post(request: Request, username: str = Form(...), password: str = Form
     refresh = auth.create_refresh_token(user.username)
     resp = RedirectResponse(url="/dashboard", status_code=302)
     # secure=True requires HTTPS; set False for local testing if needed
-    resp.set_cookie("access_token", access, httponly=True, secure=True, samesite="lax")
-    resp.set_cookie("refresh_token", refresh, httponly=True, secure=True, samesite="lax")
+    resp.set_cookie("access_token", access, httponly=True, secure=False, samesite="lax")
+    resp.set_cookie("refresh_token", refresh, httponly=True, secure=False, samesite="lax")
+
     return resp
 
 @router.get("/logout")

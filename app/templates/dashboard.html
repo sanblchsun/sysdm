@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Добро пожаловать, {{ user.username if user else "Гость" }}!</h1>
+
+        <p><a href="{{ url_for('logout') }}">Выйти</a></p>
+
+        <h2>Список агентов</h2>
+        {% if agents %}
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>UUID</th>
+                    <th>Имя</th>
+                    <th>Статус</th>
+                    <th>Инвентарь</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for agent in agents %}
+                <tr>
+                    <td>{{ agent.id }}</td>
+                    <td>{{ agent.agent_uuid }}</td>
+                    <td>{{ agent.name }}</td>
+                    <td>{{ "Онлайн" if agent.is_online else "Офлайн" }}</td>
+                    <td>{{ agent.inventory }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>Агенты отсутствуют.</p>
+        {% endif %}
+    </div>
+</body>
+</html>

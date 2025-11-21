@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from app.database import SessionLocal, Base, engine
-from app import models
+from app import models, crud
 from app.routers import auth_router, agents_router
 
 
@@ -136,10 +136,16 @@ def index(request: Request):
     user = get_current_username(request)
     return templates.TemplateResponse("index.html", {"request": request, "user": user})
 
+
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(request: Request, db = Depends(get_db), models=None):
+def dashboard(request: Request, db: Session = Depends(get_db)):
     username = get_current_username(request)
     if not username:
         return RedirectResponse("/login")
-    user = db.query(models.User).filter(username == models.User.username).first()
-    return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
+
+    user = db.query(models.User).filter(models.User.username == username).first()
+    agents = crud.list_agents(db)  # получаем всех агентов
+
+    return templates.TemplateResponse("dashboard.html", {"request": request, "user": user, "agents": agents})
+
+
