@@ -1,8 +1,8 @@
-<!doctype html>
-<html>
-<head><meta charset="utf-8"><title>Login</title></head>
-<link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
-<body>
+{% extends "base.html" %}
+
+{% block title %}Login{% endblock %}
+
+{% block content %}
   <h2>Login</h2>
   {% if error %}<p style="color:red">{{ error }}</p>{% endif %}
   <form method="post" action="/auth">
@@ -10,5 +10,4 @@
     <label>Password</label><input name="password" type="password"/><br/>
     <button type="submit">Login</button>
   </form>
-</body>
-</html>
+{% endblock %}

@@ -1,8 +1,11 @@
-import time
+#>основной импорт для подключения к базе
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+# <сновной импорт для подключения к базе
+
+from sqlalchemy.exc import OperationalError
+import time
 from loguru import logger
 from environs import Env
 
@@ -11,6 +14,7 @@ env.read_env()
 
 DATABASE_URL = env.str("DATABASE_URL")
 
+# будем в цикле, пока не подключимся к базе
 engine = None
 while engine is None:
     try:

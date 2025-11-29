@@ -1,11 +1,8 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
-</head>
-<body>
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
     <div class="container">
         <h1>Добро пожаловать, {{ user.username if user else "Гость" }}!</h1>
 
@@ -39,5 +36,5 @@
         <p>Агенты отсутствуют.</p>
         {% endif %}
     </div>
-</body>
-</html>
+{% endblock %}
+
