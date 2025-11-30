@@ -5,7 +5,7 @@ from app.database import Base
 class Agent(Base):
     __tablename__ = "agents"
     # строка проверки, если уже есть такая таблица, то она не создается
-    # __table_args__ = {'extend_existing': True}
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
     hostname = Column(String, nullable=False, index=True)
@@ -18,7 +18,7 @@ class Agent(Base):
 class User(Base):
     __tablename__ = "users"
     # строка проверки, если уже есть такая таблица, то она не создается
-    # __table_args__ = {'extend_existing': True}
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(150), unique=True, nullable=False, index=True)
