@@ -4,7 +4,7 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
 sys.path = ['', '..'] + sys.path[1:]
-from app.database import DATABASE_URL
+from app.config import settings
 from app.models import *  # не удалять
 from app.database import Base
 
@@ -41,7 +41,7 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = config.get_main_option("sqlalchemy.url", DATABASE_URL)
+    url = config.get_main_option("sqlalchemy.url", settings.DATABASE_URL)
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -62,7 +62,7 @@ def run_migrations_online() -> None:
     """
 
     configuration=config.get_section(config.config_ini_section, {})
-    configuration['sqlalchemy.url'] = DATABASE_URL
+    configuration['sqlalchemy.url'] = settings.DATABASE_URL
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",

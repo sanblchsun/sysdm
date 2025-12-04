@@ -1,50 +1,92 @@
-version: '3.9'
+# docker-compose.yml
+version: '3.8'
 
 services:
-
-  web:
-    build: .
-    container_name: fastapi_app
-    restart: always
-    env_file:
-      - .env
-    depends_on:
-      - db
-    ports:
-      - "8000:8000"
-
-  db:
-    image: postgres:16
-    container_name: postgres_db
+  postgres:
+    image: postgres:15-alpine
+    container_name: sysdm_postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-fastapi_db}
-    volumes:
-      - db_data:/var/lib/postgresql/data
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: sysdm_db
     ports:
       - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - sysdm_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sysdm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
-  nginx:
-    image: nginx:1.25.2
-    container_name: nginx_proxy
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sysdm_api
     ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
-      - ./app/static:/static:ro
-      - ./certbot/www:/var/www/certbot
-      - ./certbot/conf:/etc/letsencrypt 
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      # Основные настройки
+      APP_HOST: ${APP_HOST:-0.0.0.0}
+      APP_PORT: ${APP_PORT:-8000}
+      DEBUG: ${DEBUG:-False}
+
+      # База данных (переопределяет .env при необходимости)
+      # DATABASE_URL: ${DATABASE_URL:-postgresql://sysdm:sysdm_password@postgres:5432/sysdm_db}
+
+      # Дополнительные переменные
+      TZ: ${TZ:-Europe/Moscow}
     depends_on:
-      - web
-
-  certbot:
-    image: certbot/certbot
+      postgres:
+        condition: service_healthy
     volumes:
-      - ./certbot/www:/var/www/certbot
-      - ./certbot/conf:/etc/letsencrypt
+      # Монтируем исходный код для разработки
+      - .:/app
 
+      # Монтируем логи и загрузки
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+      - ./backups:/app/backups
+    env_file:
+      - .env
+    networks:
+      - sysdm_network
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sysdm.rule=Host(`sysdm.local`)"
+      - "traefik.http.services.sysdm.loadbalancer.server.port=8000"
+
+  # pgAdmin для управления БД (опционально)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: sysdm_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@sysdm.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - sysdm_network
+    restart: unless-stopped
+
+networks:
+  sysdm_network:
+    driver: bridge
+    name: sysdm_network
 
 volumes:
-  db_data:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local

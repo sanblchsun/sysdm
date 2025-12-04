@@ -1,0 +1,63 @@
+# docker-compose.prod.yml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: sysdm_postgres_prod
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - /data/postgres:/var/lib/postgresql/data
+    networks:
+      - sysdm_network_prod
+    env_file:
+      - .env.prod
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sysdm/app:latest
+    container_name: sysdm_api_prod
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DEBUG: "False"
+      DATABASE_URL: ${DATABASE_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      # Дополнительные настройки для продакшена
+      WORKERS: 4
+      LOG_LEVEL: info
+    volumes:
+      - /data/sysdm/logs:/app/logs
+      - /data/sysdm/uploads:/app/uploads
+      - /data/sysdm/backups:/app/backups
+    networks:
+      - sysdm_network_prod
+    env_file:
+      - .env.prod
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+networks:
+  sysdm_network_prod:
+    driver: bridge
+
+volumes:
+  postgres_data_prod:
+    driver: local
