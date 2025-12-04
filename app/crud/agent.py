@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.models.agent import Agent
 from app.schemas.agent import AgentCreate, AgentUpdate
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class CRUDAgent:
@@ -28,7 +28,7 @@ class CRUDAgent:
             for field, value in agent_data.dict(exclude_unset=True).items():
                 setattr(existing_agent, field, value)
             existing_agent.is_online = True
-            existing_agent.last_seen = datetime.utcnow()
+            existing_agent.last_seen = datetime.now()  # Используем datetime.now()
             db.commit()
             db.refresh(existing_agent)
             return existing_agent
@@ -37,8 +37,8 @@ class CRUDAgent:
         db_agent = Agent(
             **agent_data.dict(),
             is_online=True,
-            last_seen=datetime.utcnow(),
-            created_at=datetime.utcnow()
+            last_seen=datetime.now(),  # Используем datetime.now()
+            created_at=datetime.now()   # Используем datetime.now()
         )
         db.add(db_agent)
         db.commit()
@@ -54,7 +54,7 @@ class CRUDAgent:
         for field, value in agent_data.dict(exclude_unset=True).items():
             setattr(agent, field, value)
 
-        agent.updated_at = datetime.utcnow()
+        agent.updated_at = datetime.now()  # Используем datetime.now()
         db.commit()
         db.refresh(agent)
         return agent
@@ -77,7 +77,7 @@ class CRUDAgent:
             return None
 
         agent.is_online = True
-        agent.last_seen = datetime.utcnow()
+        agent.last_seen = datetime.now()  # Используем datetime.now()
         db.commit()
         db.refresh(agent)
         return agent
@@ -85,9 +85,7 @@ class CRUDAgent:
     @staticmethod
     def get_offline_agents(db: Session, timeout_minutes: int) -> List[Agent]:
         """Получает агентов, которые не выходили на связь дольше timeout_minutes"""
-        from datetime import timedelta
-
-        timeout_threshold = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+        timeout_threshold = datetime.now() - timedelta(minutes=timeout_minutes)
         return db.query(Agent).filter(
             Agent.is_online == True,
             Agent.last_seen < timeout_threshold

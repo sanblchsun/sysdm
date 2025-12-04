@@ -1,4 +1,23 @@
 # test_register.py
+"""Примеры использования:
+1. Простая регистрация:
+bash
+python test_register.py
+2. Регистрация с указанием группы:
+bash
+python test_register.py --site "office-moscow" --department "IT Department"
+3. Регистрация на другом сервере:
+bash
+python test_register.py --url "http://192.168.1.100:8000"
+4. Регистрация с heartbeat и проверкой статуса:
+bash
+python test_register.py --heartbeat --status
+5. Только проверка подключения:
+bash
+python test_register.py --test-only
+6. Регистрация с описанием:
+bash
+python test_register.py --description "Рабочая станция бухгалтера""""
 import requests
 import json
 import socket

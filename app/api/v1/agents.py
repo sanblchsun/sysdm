@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.database import get_db
 from app.schemas.agent import AgentCreate, AgentResponse, AgentUpdate
@@ -16,9 +16,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 async def register_agent(agent_data: AgentCreate, db: Session = Depends(get_db)):
     """
     Регистрация нового агента или обновление существующего.
-
-    Если агент с таким agent_id или hostname уже существует,
-    его данные будут обновлены.
     """
     try:
         agent = crud_agent.create_agent(db, agent_data)
@@ -66,7 +63,7 @@ async def agent_heartbeat(agent_id: str, db: Session = Depends(get_db)):
     return {
         "status": "success",
         "agent_id": agent_id,
-        "last_seen": agent.last_seen.isoformat(),
+        "last_seen": agent.last_seen.isoformat() if agent.last_seen else None,
         "message": "Heartbeat обновлен"
     }
 
@@ -81,20 +78,29 @@ async def get_agent_status(agent_id: str, db: Session = Depends(get_db)):
             detail=f"Агент с ID '{agent_id}' не найден"
         )
 
-    # Проверяем, не устарел ли статус
-    from datetime import timedelta
-    timeout_threshold = datetime.utcnow() - timedelta(seconds=settings.AGENT_TIMEOUT)
+    if not agent.last_seen:
+        # Если never seen, считаем offline
+        is_online = False
+        time_diff = None
+    else:
+        # Используем datetime.now() - локальное время сервера
+        now = datetime.now()
 
-    is_actually_online = (
-        agent.is_online and
-        agent.last_seen and
-        agent.last_seen > timeout_threshold
-    )
+        # Убираем timezone из last_seen если он есть
+        last_seen_naive = agent.last_seen.replace(tzinfo=None) if agent.last_seen.tzinfo else agent.last_seen
+
+        # Вычисляем разницу
+        time_diff = (now - last_seen_naive).total_seconds()
+
+        # Проверяем timeout
+        is_online = agent.is_online and time_diff < settings.AGENT_TIMEOUT
 
     return {
         "agent_id": agent_id,
         "hostname": agent.hostname,
-        "is_online": is_actually_online,
+        "is_online": is_online,
         "last_seen": agent.last_seen.isoformat() if agent.last_seen else None,
-        "agent_version": agent.agent_version
+        "time_since_last_seen_seconds": round(time_diff, 2) if time_diff is not None else None,
+        "timeout_seconds": settings.AGENT_TIMEOUT,
+        "status": "online" if is_online else "offline"
     }
