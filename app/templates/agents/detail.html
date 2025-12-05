@@ -1,0 +1,136 @@
+<!-- app/templates/agents/detail.html -->
+{% extends "layout.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="h2">
+            <i class="bi bi-pc-display"></i> {{ title }}
+        </h1>
+        <a href="/agents" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Все агенты
+        </a>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">Основная информация</h5>
+                </div>
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tr>
+                            <th width="40%">Agent ID:</th>
+                            <td><code>{{ agent.agent_id }}</code></td>
+                        </tr>
+                        <tr>
+                            <th>Имя хоста:</th>
+                            <td>{{ agent.hostname }}</td>
+                        </tr>
+                        <tr>
+                            <th>IP адрес:</th>
+                            <td>{{ agent.local_ip }}</td>
+                        </tr>
+                        <tr>
+                            <th>Платформа:</th>
+                            <td>
+                                {% if agent.platform == 'windows' %}
+                                <i class="bi bi-windows"></i> Windows
+                                {% elif agent.platform == 'linux' %}
+                                <i class="bi bi-ubuntu"></i> Linux
+                                {% else %}
+                                {{ agent.platform or 'Unknown' }}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Операционная система:</th>
+                            <td>{{ agent.operating_system or 'Не указано' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Статус:</th>
+                            <td>
+                                {% if agent.is_online %}
+                                <span class="badge bg-success">Online</span>
+                                {% else %}
+                                <span class="badge bg-danger">Offline</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Последняя активность:</th>
+                            <td>{{ agent.last_seen|time_ago }}</td>
+                        </tr>
+                        <tr>
+                            <th>Зарегистрирован:</th>
+                            <td>{{ agent.created_at|time_ago }}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">Системная информация</h5>
+                </div>
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tr>
+                            <th width="40%">CPU:</th>
+                            <td>{{ agent.cpu_model or 'Не указано' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Ядра CPU:</th>
+                            <td>{{ agent.cpu_cores or 'Не указано' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Память:</th>
+                            <td>
+                                {% if agent.total_ram %}
+                                {{ (agent.total_ram / 1024)|round(1) }} GB
+                                {% else %}
+                                Не указано
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Архитектура:</th>
+                            <td>{{ agent.architecture or 'Не указано' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Версия агента:</th>
+                            <td>{{ agent.agent_version }}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Действия</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-primary"
+                                hx-put="/api/v1/agents/{{ agent.agent_id }}/heartbeat"
+                                hx-target="#toast-container">
+                            <i class="bi bi-heart-pulse"></i> Отправить heartbeat
+                        </button>
+                        <button class="btn btn-outline-success">
+                            <i class="bi bi-terminal"></i> Выполнить команду
+                        </button>
+                        <button class="btn btn-outline-info">
+                            <i class="bi bi-graph-up"></i> Мониторинг
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

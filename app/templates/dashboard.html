@@ -1,40 +1,389 @@
-{% extends "base.html" %}
+<!-- app/templates/dashboard.html -->
+{% extends "layout.html" %}
 
-{% block title %}Dashboard{% endblock %}
+{% block title %}Dashboard - SysDM{% endblock %}
 
-{% block content %}
-    <div class="container">
-        <h1>Добро пожаловать, {{ user.username if user else "Гость" }}!</h1>
-
-        <p><a href="{{ url_for('logout') }}">Выйти</a></p>
-
-        <h2>Список агентов</h2>
-        {% if agents %}
-        <table>
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>UUID</th>
-                    <th>Имя</th>
-                    <th>Статус</th>
-                    <th>Инвентарь</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for agent in agents %}
-                <tr>
-                    <td>{{ agent.id }}</td>
-                    <td>{{ agent.agent_uuid }}</td>
-                    <td>{{ agent.name }}</td>
-                    <td>{{ "Онлайн" if agent.is_online else "Офлайн" }}</td>
-                    <td>{{ agent.inventory }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <p>Агенты отсутствуют.</p>
-        {% endif %}
-    </div>
+{% block extra_css %}
+<style>
+.platform-chart-container {
+    position: relative;
+    height: 250px;
+}
+</style>
 {% endblock %}
 
+{% block content %}
+<div class="row">
+    <!-- Статистика -->
+    <div class="col-md-3 mb-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="card-title">Всего агентов</h6>
+                        <h2 class="card-text">{{ stats.total_agents }}</h2>
+                    </div>
+                    <i class="bi bi-pc-display-horizontal display-4"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3 mb-3">
+        <div class="card bg-success text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="card-title">Онлайн</h6>
+                        <h2 class="card-text">{{ stats.online_agents }}</h2>
+                    </div>
+                    <i class="bi bi-wifi display-4"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3 mb-3">
+        <div class="card bg-danger text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="card-title">Оффлайн</h6>
+                        <h2 class="card-text">{{ stats.offline_agents }}</h2>
+                    </div>
+                    <i class="bi bi-wifi-off display-4"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3 mb-3">
+        <div class="card bg-warning text-dark">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="card-title">Предупреждения</h6>
+                        <h2 class="card-text">{{ stats.warnings }}</h2>
+                    </div>
+                    <i class="bi bi-exclamation-triangle display-4"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Таблица агентов -->
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-list-ul"></i> Агенты
+                    <span class="badge bg-secondary">{{ agents|length }}</span>
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Имя</th>
+                                <th>IP</th>
+                                <th>Платформа</th>
+                                <th>Статус</th>
+                                <th>Последняя активность</th>
+                                <th>Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for agent in agents %}
+                            <tr>
+                                <td>
+                                    <strong>{{ agent.hostname }}</strong>
+                                    <br>
+                                    <small class="text-muted">{{ agent.agent_id }}</small>
+                                </td>
+                                <td>{{ agent.local_ip }}</td>
+                                <td>
+                                    {% if agent.platform == 'windows' %}
+                                    <i class="bi bi-windows text-primary"></i> Windows
+                                    {% elif agent.platform == 'linux' %}
+                                    <i class="bi bi-ubuntu text-success"></i> Linux
+                                    {% else %}
+                                    <i class="bi bi-question-circle"></i> {{ agent.platform or 'Unknown' }}
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if agent.is_online %}
+                                    <span class="badge bg-success">
+                                        <i class="bi bi-circle-fill"></i> Online
+                                    </span>
+                                    {% else %}
+                                    <span class="badge bg-danger">
+                                        <i class="bi bi-circle-fill"></i> Offline
+                                    </span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span title="{{ agent.last_seen }}">
+                                        {{ agent.last_seen|time_ago }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm">
+                                        <button class="btn btn-outline-primary"
+                                                hx-put="/api/v1/agents/{{ agent.agent_id }}/heartbeat"
+                                                hx-target="#toast-container">
+                                            <i class="bi bi-heart-pulse"></i>
+                                        </button>
+                                        <a href="/agents/{{ agent.agent_id }}"
+                                           class="btn btn-outline-info">
+                                            <i class="bi bi-info-circle"></i>
+                                        </a>
+                                        <button class="btn btn-outline-warning"
+                                                onclick="runCommand('{{ agent.agent_id }}')">
+                                            <i class="bi bi-terminal"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-4">
+                                    <i class="bi bi-inbox display-6"></i>
+                                    <p class="mt-2">Нет зарегистрированных агентов</p>
+                                    <a href="/agents/register" class="btn btn-primary btn-sm">
+                                        Зарегистрировать первого агента
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Правая панель -->
+    <div class="col-md-4">
+        <!-- Быстрые действия -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-lightning-charge"></i> Быстрые действия
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <button class="btn btn-primary" onclick="registerAgent()">
+                        <i class="bi bi-plus-circle"></i> Зарегистрировать агент
+                    </button>
+                    <button class="btn btn-success" onclick="runQuickTask()">
+                        <i class="bi bi-play-circle"></i> Запустить задачу
+                    </button>
+                    <button class="btn btn-info" onclick="refreshAll()">
+                        <i class="bi bi-arrow-clockwise"></i> Обновить все
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Статистика платформ -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-pie-chart"></i> Платформы
+                </h5>
+            </div>
+            <div class="card-body platform-chart-container">
+                <canvas id="platformChart"
+                        data-labels='{{ platform_labels|tojson|safe }}'
+                        data-values='{{ platform_data|tojson|safe }}'>
+                </canvas>
+            </div>
+        </div>
+
+        <!-- Последние события -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-clock-history"></i> Последние события
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="list-group list-group-flush">
+                    {% for event in recent_events %}
+                    <div class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between">
+                            <small class="text-muted">{{ event.timestamp|time_ago }}</small>
+                            <span class="badge bg-{{ event.type }}">
+                                {{ event.type|title }}
+                            </span>
+                        </div>
+                        <p class="mb-1">{{ event.message }}</p>
+                    </div>
+                    {% else %}
+                    <div class="text-center text-muted py-3">
+                        Нет событий
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Toast для уведомлений -->
+<div id="toast-container" class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+
+<!-- Модальное окно для команд -->
+<div class="modal fade" id="commandModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Выполнить команду</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="commandForm">
+                    <div class="mb-3">
+                        <label class="form-label">Агент</label>
+                        <input type="text" id="agentId" class="form-control" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Команда</label>
+                        <select class="form-select" id="commandSelect">
+                            <option value="systeminfo">System Information</option>
+                            <option value="disk">Disk Usage</option>
+                            <option value="services">List Services</option>
+                            <option value="processes">Running Processes</option>
+                            <option value="custom">Custom Command</option>
+                        </select>
+                    </div>
+                    <div class="mb-3" id="customCommandDiv" style="display: none;">
+                        <label class="form-label">Пользовательская команда</label>
+                        <input type="text" class="form-control" id="customCommand"
+                               placeholder="Введите команду...">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                <button type="button" class="btn btn-primary" onclick="executeCommand()">
+                    Выполнить
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Глобальные переменные
+let currentAgentId = '';
+
+// Функции
+function runCommand(agentId) {
+    currentAgentId = agentId;
+    document.getElementById('agentId').value = agentId;
+    const modal = new bootstrap.Modal(document.getElementById('commandModal'));
+    modal.show();
+}
+
+function executeCommand() {
+    const command = document.getElementById('commandSelect').value;
+    const customCommand = document.getElementById('customCommand').value;
+
+    // Отправка команды через htmx или fetch
+    fetch(`/api/v1/agents/${currentAgentId}/tasks`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            command: command === 'custom' ? customCommand : command
+        })
+    }).then(response => {
+        if (response.ok) {
+            showToast('Команда отправлена', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('commandModal')).hide();
+        } else {
+            showToast('Ошибка отправки команды', 'danger');
+        }
+    });
+}
+
+function showToast(message, type) {
+    const toastEl = document.createElement('div');
+    toastEl.className = `toast align-items-center text-bg-${type} border-0`;
+    toastEl.innerHTML = `
+        <div class="d-flex">
+            <div class="toast-body">${message}</div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+    `;
+
+    const container = document.getElementById('toast-container');
+    container.appendChild(toastEl);
+    const toast = new bootstrap.Toast(toastEl);
+    toast.show();
+
+    // Автоудаление
+    setTimeout(() => toastEl.remove(), 5000);
+}
+
+// Инициализация при загрузке страницы
+document.addEventListener('DOMContentLoaded', function() {
+    // График платформ (используем data-атрибуты)
+    const chartEl = document.getElementById('platformChart');
+    if (chartEl) {
+        try {
+            const labels = JSON.parse(chartEl.dataset.labels || '[]');
+            const data = JSON.parse(chartEl.dataset.values || '[]');
+
+            if (labels.length > 0 && data.length > 0) {
+                new Chart(chartEl.getContext('2d'), {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: data,
+                            backgroundColor: ['#007bff', '#28a745', '#dc3545', '#6c757d']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                            }
+                        }
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('Error loading chart:', e);
+        }
+    }
+
+    // Показать/скрыть поле для пользовательской команды
+    const commandSelect = document.getElementById('commandSelect');
+    if (commandSelect) {
+        commandSelect.addEventListener('change', function() {
+            const customDiv = document.getElementById('customCommandDiv');
+            if (customDiv) {
+                customDiv.style.display = this.value === 'custom' ? 'block' : 'none';
+            }
+        });
+    }
+
+    // Автообновление каждые 30 секунд
+    setInterval(() => {
+        if (typeof htmx !== 'undefined') {
+            htmx.ajax('GET', '/dashboard', 'body');
+        }
+    }, 30000);
+});
+</script>
+{% endblock %}
