@@ -1,8 +1,8 @@
-"""4 migration
+"""3 migration
 
-Revision ID: 3ede911e7552
-Revises: 78cd45822e68
-Create Date: 2025-12-07 12:24:42.047632
+Revision ID: ba5abb0e9cb9
+Revises: 
+Create Date: 2025-12-07 19:31:01.232948
 
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '3ede911e7552'
-down_revision: Union[str, Sequence[str], None] = '78cd45822e68'
+revision: str = 'ba5abb0e9cb9'
+down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -25,31 +25,29 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('agent_id', sa.String(length=100), nullable=False),
     sa.Column('hostname', sa.String(length=255), nullable=False),
-    sa.Column('local_ip', sa.String(length=45), nullable=False),
-    sa.Column('public_ip', sa.String(length=45), nullable=True),
+    sa.Column('local_ip', sa.String(length=15), nullable=False),
+    sa.Column('public_ip', sa.String(length=15), nullable=True),
     sa.Column('mac_address', sa.String(length=17), nullable=True),
-    sa.Column('operating_system', sa.String(length=255), nullable=True),
+    sa.Column('operating_system', sa.String(length=100), nullable=True),
     sa.Column('platform', sa.String(length=50), nullable=True),
-    sa.Column('architecture', sa.String(length=10), nullable=True),
-    sa.Column('cpu_model', sa.String(length=255), nullable=True),
+    sa.Column('architecture', sa.String(length=50), nullable=True),
+    sa.Column('cpu_model', sa.String(length=100), nullable=True),
     sa.Column('cpu_cores', sa.Integer(), nullable=True),
     sa.Column('total_ram', sa.Integer(), nullable=True),
     sa.Column('disk_space', sa.JSON(), nullable=True),
     sa.Column('is_online', sa.Boolean(), nullable=True),
-    sa.Column('last_seen', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
-    sa.Column('agent_version', sa.String(length=20), nullable=True),
+    sa.Column('last_seen', sa.DateTime(), nullable=True),
+    sa.Column('agent_version', sa.String(length=50), nullable=True),
     sa.Column('site_id', sa.String(length=100), nullable=True),
     sa.Column('department', sa.String(length=100), nullable=True),
     sa.Column('description', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_agents_agent_id'), 'agents', ['agent_id'], unique=True)
-    op.create_index(op.f('ix_agents_hostname'), 'agents', ['hostname'], unique=False)
     op.create_index(op.f('ix_agents_id'), 'agents', ['id'], unique=False)
-    op.create_index(op.f('ix_agents_site_id'), 'agents', ['site_id'], unique=False)
     op.create_table('users',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('username', sa.String(), nullable=False),
@@ -72,9 +70,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_users_id'), table_name='users')
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
-    op.drop_index(op.f('ix_agents_site_id'), table_name='agents')
     op.drop_index(op.f('ix_agents_id'), table_name='agents')
-    op.drop_index(op.f('ix_agents_hostname'), table_name='agents')
     op.drop_index(op.f('ix_agents_agent_id'), table_name='agents')
     op.drop_table('agents')
     # ### end Alembic commands ###

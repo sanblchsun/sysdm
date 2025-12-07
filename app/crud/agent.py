@@ -2,8 +2,9 @@
 from sqlalchemy.orm import Session
 from app.models.agent import Agent
 from app.schemas.agent import AgentCreate, AgentUpdate
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+import json
 
 
 class CRUDAgent:
@@ -16,6 +17,44 @@ class CRUDAgent:
         return db.query(Agent).order_by(Agent.created_at.desc()).offset(skip).limit(limit).all()
 
     @staticmethod
+    def _prepare_agent_data(agent_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Подготавливает данные агента для сохранения в БД"""
+        # Обрабатываем disk_space - конвертируем в JSON или устанавливаем None
+        disk_space = agent_dict.get('disk_space')
+        if disk_space is None or disk_space == 'null' or disk_space == '':
+            disk_space = None
+        elif isinstance(disk_space, dict):
+            # Убедимся, что это валидный JSON
+            try:
+                # Просто оставляем как dict, SQLAlchemy/PostgreSQL обработает
+                pass
+            except Exception:
+                disk_space = None
+
+        # Подготавливаем словарь для модели
+        model_data = {
+            'agent_id': agent_dict.get('agent_id'),
+            'hostname': agent_dict.get('hostname'),
+            'local_ip': agent_dict.get('local_ip'),
+            'public_ip': agent_dict.get('public_ip'),
+            'mac_address': agent_dict.get('mac_address'),
+            'operating_system': agent_dict.get('operating_system'),
+            'platform': agent_dict.get('platform'),
+            'architecture': agent_dict.get('architecture'),
+            'cpu_model': agent_dict.get('cpu_model'),
+            'cpu_cores': agent_dict.get('cpu_cores'),
+            'total_ram': agent_dict.get('total_ram'),
+            'disk_space': disk_space,
+            'site_id': agent_dict.get('site_id'),
+            'department': agent_dict.get('department'),
+            'description': agent_dict.get('description'),
+        }
+
+        # Убираем None значения, которые не должны быть в словаре для **kwargs
+        # Но для модели Agent лучше оставить явные None
+        return model_data
+
+    @staticmethod
     def create_agent(db: Session, agent_data: AgentCreate) -> Agent:
         # Проверяем существование агента
         existing_agent = db.query(Agent).filter(
@@ -25,21 +64,38 @@ class CRUDAgent:
 
         if existing_agent:
             # Обновляем существующего агента
-            for field, value in agent_data.dict(exclude_unset=True).items():
+            update_data = agent_data.dict(exclude_unset=True)
+            for field, value in update_data.items():
                 setattr(existing_agent, field, value)
             existing_agent.is_online = True
-            existing_agent.last_seen = datetime.now()  # Используем datetime.now()
+            existing_agent.last_seen = datetime.now()
             db.commit()
             db.refresh(existing_agent)
             return existing_agent
 
         # Создаем нового агента
         db_agent = Agent(
-            **agent_data.dict(),
+            agent_id=agent_data.agent_id,
+            hostname=agent_data.hostname,
+            local_ip=agent_data.local_ip,
+            public_ip=agent_data.public_ip,
+            mac_address=agent_data.mac_address,
+            operating_system=agent_data.operating_system,
+            platform=agent_data.platform,
+            architecture=agent_data.architecture,
+            cpu_model=agent_data.cpu_model,
+            cpu_cores=agent_data.cpu_cores,
+            total_ram=agent_data.total_ram,
+            disk_space=agent_data.disk_space or {},
+            site_id=agent_data.site_id,
+            department=agent_data.department,
+            description=agent_data.description,
             is_online=True,
-            last_seen=datetime.now(),  # Используем datetime.now()
-            created_at=datetime.now()   # Используем datetime.now()
+            last_seen=datetime.now(),
+            created_at=datetime.now(),
+            agent_version="1.0.0"  # Добавляем обязательное поле
         )
+
         db.add(db_agent)
         db.commit()
         db.refresh(db_agent)
@@ -51,10 +107,14 @@ class CRUDAgent:
         if not agent:
             return None
 
-        for field, value in agent_data.dict(exclude_unset=True).items():
+        update_data = agent_data.dict(exclude_unset=True)
+        for field, value in update_data.items():
+            # Особая обработка для disk_space
+            if field == 'disk_space' and (value is None or value == 'null' or value == ''):
+                value = None
             setattr(agent, field, value)
 
-        agent.updated_at = datetime.now()  # Используем datetime.now()
+        agent.updated_at = datetime.now()
         db.commit()
         db.refresh(agent)
         return agent
@@ -77,7 +137,7 @@ class CRUDAgent:
             return None
 
         agent.is_online = True
-        agent.last_seen = datetime.now()  # Используем datetime.now()
+        agent.last_seen = datetime.now()
         db.commit()
         db.refresh(agent)
         return agent

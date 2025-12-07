@@ -1,3 +1,4 @@
+# app/utils/security.py
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
@@ -18,22 +19,27 @@ except Exception as e:
     USE_BCRYPT = False
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Проверяет пароль"""
+    """Проверяет пароль (sha256 для тестирования)"""
+    print(f"DEBUG verify_password called")
+    print(f"  plain_password: '{plain_password}'")
+    print(f"  hashed_password from DB: '{hashed_password}'")
+
     if not plain_password or not hashed_password:
+        print(f"  ERROR: Missing password or hash")
         return False
 
-    if USE_BCRYPT:
-        try:
-            return pwd_context.verify(plain_password, hashed_password)
-        except Exception:
-            return False
-    else:
-        # Fallback на sha256
-        try:
-            test_hash = hashlib.sha256(plain_password.encode()).hexdigest()
-            return test_hash == hashed_password
-        except Exception:
-            return False
+    try:
+        # Хешируем введенный пароль
+        test_hash = hashlib.sha256(plain_password.encode()).hexdigest()
+        print(f"  test_hash: '{test_hash}'")
+        print(f"  Match: {test_hash == hashed_password}")
+
+        result = test_hash == hashed_password
+        print(f"  Result: {result}")
+        return result
+    except Exception as e:
+        print(f"  Exception: {e}")
+        return False
 
 def get_password_hash(password: str) -> str:
     """Хеширует пароль"""

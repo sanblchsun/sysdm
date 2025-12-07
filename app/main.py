@@ -2,11 +2,14 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
+import logging
 from app.config import settings
 from app.database import engine, Base
 from app.routers import agents_router, auth_router
 from app.web.routes import router as web_router
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Создаем таблицы
 Base.metadata.create_all(bind=engine)

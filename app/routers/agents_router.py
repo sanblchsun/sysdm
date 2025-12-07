@@ -1,3 +1,4 @@
+# app/routers/agents_router.py
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
@@ -6,6 +7,7 @@ from app.schemas.agent import AgentCreate, AgentUpdate, AgentResponse
 from app.database import SessionLocal
 from app.routers.auth_router import get_current_active_user, get_current_admin_user  # Добавляем импорт!
 import json
+import traceback
 
 router = APIRouter()
 
@@ -27,28 +29,58 @@ def list_agents(
     return crud_agent.get_agents(db, skip=skip, limit=limit)
 
 
-@router.post("/register", response_model=AgentResponse)
+@router.post("/register", status_code=201)  # Убрали response_model
 def register_agent(
     agent: AgentCreate,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_active_user)  # Добавляем аутентификацию
+    current_user = Depends(get_current_active_user)
 ):
     """Регистрирует нового агента или обновляет существующего"""
-    # Проверяем существование агента
-    existing = crud_agent.get_agent(db, agent.agent_id)
-    if existing:
-        # Обновляем существующего агента
-        update_data = agent.dict(exclude_unset=True)
-        for field, value in update_data.items():
-            setattr(existing, field, value)
-        existing.is_online = True
-        db.add(existing)
-        db.commit()
-        db.refresh(existing)
-        return existing
+    try:
+        # Проверяем существование агента
+        existing = crud_agent.get_agent(db, agent.agent_id)
+        if existing:
+            # Обновляем существующего агента
+            update_data = agent.dict(exclude_unset=True)
+            for field, value in update_data.items():
+                setattr(existing, field, value)
+            existing.is_online = True
+            db.add(existing)
+            db.commit()
+            db.refresh(existing)
+            # Возвращаем как словарь
+            return {
+                "id": existing.id,
+                "agent_id": existing.agent_id,
+                "hostname": existing.hostname,
+                "local_ip": existing.local_ip,
+                "is_online": existing.is_online,
+                "agent_version": existing.agent_version,
+                "created_at": existing.created_at.isoformat() if existing.created_at else None,
+                "message": "Agent updated"
+            }
 
-    # Создаем нового агента
-    return crud_agent.create_agent(db, agent)
+        # Создаем нового агента
+        db_agent = crud_agent.create_agent(db, agent)
+        if db_agent:
+            return {
+                "id": db_agent.id,
+                "agent_id": db_agent.agent_id,
+                "hostname": db_agent.hostname,
+                "local_ip": db_agent.local_ip,
+                "is_online": db_agent.is_online,
+                "agent_version": db_agent.agent_version,
+                "created_at": db_agent.created_at.isoformat() if db_agent.created_at else None,
+                "message": "Agent created"
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create agent")
+
+    except Exception as e:
+        print(f"Error in register_agent: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
