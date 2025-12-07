@@ -1,91 +1,73 @@
-// app/static/js/main.js
-// Основной JavaScript файл для SysDM
+// Основные скрипты для всего приложения
 
+// Инициализация tooltips и popovers
 document.addEventListener('DOMContentLoaded', function() {
-    // Инициализация tooltips
+    // Включаем Bootstrap компоненты
     var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
     var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
         return new bootstrap.Tooltip(tooltipTriggerEl);
     });
 
-    // Инициализация popovers
     var popoverTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="popover"]'));
     var popoverList = popoverTriggerList.map(function (popoverTriggerEl) {
         return new bootstrap.Popover(popoverTriggerEl);
     });
+
+    // Анимация появления элементов
+    const animatedElements = document.querySelectorAll('.fade-in');
+    animatedElements.forEach(el => {
+        el.style.opacity = '0';
+        setTimeout(() => {
+            el.style.transition = 'opacity 0.5s ease';
+            el.style.opacity = '1';
+        }, 100);
+    });
+
+    // Автофокус на поле входа
+    const usernameInput = document.getElementById('username');
+    if (usernameInput) {
+        usernameInput.focus();
+    }
+
+    // Валидация форм
+    const forms = document.querySelectorAll('.needs-validation');
+    Array.from(forms).forEach(form => {
+        form.addEventListener('submit', event => {
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            form.classList.add('was-validated');
+        }, false);
+    });
+
+    // Сохранение темы
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.documentElement.setAttribute('data-bs-theme', savedTheme);
 });
 
-// Функция для показа уведомлений
-function showNotification(message, type = 'info') {
-    const container = document.getElementById('notification-container') || createNotificationContainer();
+// Функция для смены темы
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-bs-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+}
 
+// Уведомления
+function showNotification(message, type = 'info') {
     const alert = document.createElement('div');
-    alert.className = `alert alert-${type} alert-dismissible fade show`;
+    alert.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+    alert.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
     alert.innerHTML = `
         ${message}
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     `;
+    document.body.appendChild(alert);
 
-    container.appendChild(alert);
-
-    // Автоудаление через 5 секунд
     setTimeout(() => {
         if (alert.parentNode) {
             alert.remove();
         }
     }, 5000);
 }
-
-function createNotificationContainer() {
-    const container = document.createElement('div');
-    container.id = 'notification-container';
-    container.className = 'position-fixed top-0 end-0 p-3';
-    container.style.zIndex = '1050';
-    document.body.appendChild(container);
-    return container;
-}
-
-// Функция для подтверждения действий
-function confirmAction(message, callback) {
-    if (confirm(message)) {
-        callback();
-    }
-}
-
-// Функция для загрузки данных через htmx
-function loadData(url, target) {
-    htmx.ajax('GET', url, target);
-}
-
-// Функция для обновления статуса агента
-function refreshAgentStatus(agentId) {
-    fetch(`/api/v1/agents/${agentId}/status`)
-        .then(response => response.json())
-        .then(data => {
-            const statusElement = document.getElementById(`status-${agentId}`);
-            if (statusElement) {
-                statusElement.innerHTML = data.is_online ?
-                    '<span class="badge bg-success">Online</span>' :
-                    '<span class="badge bg-danger">Offline</span>';
-            }
-        });
-}
-
-// Периодическое обновление статуса агентов
-function startAutoRefresh(interval = 30000) {
-    setInterval(() => {
-        document.querySelectorAll('[data-agent-id]').forEach(element => {
-            const agentId = element.getAttribute('data-agent-id');
-            refreshAgentStatus(agentId);
-        });
-    }, interval);
-}
-
-// Экспорт функций для использования в шаблонах
-window.SysDM = {
-    showNotification,
-    confirmAction,
-    loadData,
-    refreshAgentStatus,
-    startAutoRefresh
-};

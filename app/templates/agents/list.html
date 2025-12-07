@@ -1,78 +1,435 @@
-<!-- app/templates/agents/list.html -->
 {% extends "layout.html" %}
 
-{% block title %}{{ title }}{% endblock %}
+{% block title %}Агенты - SysDM{% endblock %}
+
+{% block extra_css %}
+<style>
+    .agent-row:hover {
+        background-color: rgba(0, 0, 0, 0.03);
+        cursor: pointer;
+    }
+
+    .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+    }
+
+    .status-online {
+        background-color: #28a745;
+    }
+
+    .status-offline {
+        background-color: #dc3545;
+    }
+
+    .search-box {
+        max-width: 300px;
+    }
+</style>
+{% endblock %}
 
 {% block content %}
 <div class="container-fluid">
-    <h1 class="h2 mb-4">
-        <i class="bi bi-pc-display"></i> {{ title }}
-    </h1>
+    <!-- Заголовок и поиск -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="h3 mb-0">
+            <i class="fas fa-desktop me-2"></i>Агенты
+            <span class="badge bg-secondary ms-2">{{ agents|length }}</span>
+        </h1>
 
-    <div class="card">
-        <div class="card-header">
-            <div class="d-flex justify-content-between align-items-center">
-                <span>Всего агентов: {{ agents|length }}</span>
-                <a href="/" class="btn btn-sm btn-outline-primary">
-                    <i class="bi bi-arrow-left"></i> Назад к дашборду
-                </a>
+        <div class="d-flex">
+            <div class="input-group search-box">
+                <input type="text" class="form-control" placeholder="Поиск агентов..." id="searchInput">
+                <button class="btn btn-outline-secondary" type="button" onclick="searchAgents()">
+                    <i class="fas fa-search"></i>
+                </button>
+            </div>
+
+            {% if current_user.is_admin %}
+            <button class="btn btn-primary ms-3" onclick="showAddAgentModal()">
+                <i class="fas fa-plus me-2"></i>Добавить агента
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Фильтры -->
+    <div class="card mb-4">
+        <div class="card-body py-2">
+            <div class="d-flex align-items-center">
+                <span class="me-3">Фильтры:</span>
+                <div class="btn-group btn-group-sm" role="group">
+                    <button type="button" class="btn btn-outline-secondary active" onclick="filterAgents('all')">
+                        Все <span class="badge bg-secondary ms-1">{{ agents|length }}</span>
+                    </button>
+                    <button type="button" class="btn btn-outline-success" onclick="filterAgents('online')">
+                        Онлайн <span class="badge bg-success ms-1">{{ agents|selectattr('is_online')|list|length }}</span>
+                    </button>
+                    <button type="button" class="btn btn-outline-danger" onclick="filterAgents('offline')">
+                        Офлайн <span class="badge bg-danger ms-1">{{ agents|rejectattr('is_online')|list|length }}</span>
+                    </button>
+                </div>
+
+                <div class="ms-auto">
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-secondary" onclick="refreshAgents()">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+                            <i class="fas fa-cog"></i>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="#" onclick="exportAgents()">
+                                <i class="fas fa-download me-2"></i>Экспорт в CSV
+                            </a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="#" onclick="showSettings()">
+                                <i class="fas fa-sliders-h me-2"></i>Настройки отображения
+                            </a></li>
+                        </ul>
+                    </div>
+                </div>
             </div>
         </div>
-        <div class="card-body">
-            {% if agents %}
+    </div>
+
+    <!-- Таблица агентов -->
+    <div class="card">
+        <div class="card-body p-0">
             <div class="table-responsive">
-                <table class="table table-hover">
-                    <thead>
+                <table class="table table-hover mb-0" id="agentsTable">
+                    <thead class="table-light">
                         <tr>
-                            <th>ID</th>
+                            <th width="50">
+                                <input type="checkbox" class="form-check-input" id="selectAll" onchange="toggleSelectAll()">
+                            </th>
                             <th>Имя хоста</th>
+                            <th>Агент ID</th>
                             <th>IP адрес</th>
-                            <th>Платформа</th>
+                            <th>Операционная система</th>
                             <th>Статус</th>
-                            <th>Зарегистрирован</th>
+                            <th>Последняя активность</th>
+                            <th>Действия</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for agent in agents %}
-                        <tr>
-                            <td>
-                                <code>{{ agent.agent_id[:8] }}...</code>
+                        <tr class="agent-row" data-agent-id="{{ agent.agent_id }}" onclick="window.location.href='/agents/{{ agent.agent_id }}'">
+                            <td onclick="event.stopPropagation()">
+                                <input type="checkbox" class="form-check-input agent-checkbox" value="{{ agent.agent_id }}">
                             </td>
                             <td>
-                                <a href="/agents/{{ agent.agent_id }}">
-                                    {{ agent.hostname }}
-                                </a>
+                                <div class="d-flex align-items-center">
+                                    <i class="fas fa-desktop me-2 text-primary"></i>
+                                    <div>
+                                        <strong>{{ agent.hostname }}</strong>
+                                        {% if agent.department %}
+                                        <div class="text-muted small">{{ agent.department }}</div>
+                                        {% endif %}
+                                    </div>
+                                </div>
                             </td>
-                            <td>{{ agent.local_ip }}</td>
                             <td>
-                                {% if agent.platform == 'windows' %}
-                                <span class="badge bg-primary">Windows</span>
-                                {% elif agent.platform == 'linux' %}
-                                <span class="badge bg-success">Linux</span>
+                                <code class="small">{{ agent.agent_id }}</code>
+                            </td>
+                            <td>
+                                <div>
+                                    <span class="badge bg-dark">{{ agent.local_ip }}</span>
+                                    {% if agent.public_ip %}
+                                    <div class="small text-muted mt-1">{{ agent.public_ip }}</div>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td>
+                                {% if agent.operating_system %}
+                                <div class="d-flex align-items-center">
+                                    {% if 'windows' in agent.platform|lower %}
+                                    <i class="fab fa-windows me-2 text-info"></i>
+                                    {% elif 'linux' in agent.platform|lower %}
+                                    <i class="fab fa-linux me-2 text-success"></i>
+                                    {% elif 'mac' in agent.platform|lower %}
+                                    <i class="fab fa-apple me-2"></i>
+                                    {% else %}
+                                    <i class="fas fa-server me-2"></i>
+                                    {% endif %}
+                                    <span>{{ agent.operating_system[:30] }}{% if agent.operating_system|length > 30 %}...{% endif %}</span>
+                                </div>
                                 {% else %}
-                                <span class="badge bg-secondary">{{ agent.platform or 'Unknown' }}</span>
+                                <span class="text-muted">Не указано</span>
                                 {% endif %}
                             </td>
                             <td>
                                 {% if agent.is_online %}
-                                <span class="badge bg-success">Online</span>
+                                <span class="badge bg-success">
+                                    <span class="status-dot status-online"></span>Онлайн
+                                </span>
                                 {% else %}
-                                <span class="badge bg-danger">Offline</span>
+                                <span class="badge bg-danger">
+                                    <span class="status-dot status-offline"></span>Офлайн
+                                </span>
                                 {% endif %}
                             </td>
-                            <td>{{ agent.created_at|time_ago }}</td>
+                            <td>
+                                {% if agent.last_seen %}
+                                {{ agent.last_seen.strftime('%Y-%m-%d %H:%M') }}
+                                <div class="small text-muted">
+                                    {{ humanize_time(agent.last_seen) }}
+                                </div>
+                                {% else %}
+                                <span class="text-muted">Никогда</span>
+                                {% endif %}
+                            </td>
+                            <td onclick="event.stopPropagation()">
+                                <div class="btn-group btn-group-sm">
+                                    <a href="/agents/{{ agent.agent_id }}" class="btn btn-outline-primary" title="Просмотр">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+                                    <button class="btn btn-outline-success" onclick="sendHeartbeat('{{ agent.agent_id }}', event)" title="Отправить heartbeat">
+                                        <i class="fas fa-heartbeat"></i>
+                                    </button>
+                                    {% if current_user.is_admin %}
+                                    <button class="btn btn-outline-danger" onclick="deleteAgent('{{ agent.agent_id }}', event)" title="Удалить">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="8" class="text-center py-5">
+                                <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+                                <h5>Агенты не найдены</h5>
+                                <p class="text-muted">Зарегистрируйте первого агента через API или форму</p>
+                                <a href="/api/docs" target="_blank" class="btn btn-outline-primary">
+                                    <i class="fas fa-book me-2"></i>Документация API
+                                </a>
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-            {% else %}
-            <div class="text-center py-5">
-                <i class="bi bi-inbox display-1 text-muted"></i>
-                <p class="mt-3">Нет зарегистрированных агентов</p>
+        </div>
+
+        <!-- Пагинация -->
+        {% if agents|length > 0 %}
+        <div class="card-footer">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <small class="text-muted">
+                        Показано {{ agents|length }} из {{ total_count }} агентов
+                    </small>
+                </div>
+                <div>
+                    <button class="btn btn-sm btn-outline-secondary" disabled>
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <span class="mx-2">Страница 1</span>
+                    <button class="btn btn-sm btn-outline-secondary">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
             </div>
-            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Модальное окно добавления агента -->
+<div class="modal fade" id="addAgentModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-plus me-2"></i>Добавить агента
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-4">
+                    Для автоматической регистрации агента используйте API.<br>
+                    Ручное добавление доступно в расширенной версии.
+                </p>
+
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle me-2"></i>
+                    <strong>Рекомендуемый способ:</strong><br>
+                    Используйте API эндпоинт <code>/api/v1/agents/register</code>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+                <a href="/api/docs#/agents/register_agent_agents_register_post" target="_blank" class="btn btn-primary">
+                    <i class="fas fa-external-link-alt me-2"></i>Открыть документацию API
+                </a>
+            </div>
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Фильтрация агентов
+function filterAgents(filter) {
+    const rows = document.querySelectorAll('#agentsTable tbody tr.agent-row');
+    const filterButtons = document.querySelectorAll('.btn-group .btn');
+
+    // Обновляем активную кнопку
+    filterButtons.forEach(btn => btn.classList.remove('active'));
+    event.target.classList.add('active');
+
+    // Фильтруем строки
+    rows.forEach(row => {
+        const statusBadge = row.querySelector('.badge');
+        const isOnline = statusBadge.classList.contains('bg-success');
+
+        switch(filter) {
+            case 'all':
+                row.style.display = '';
+                break;
+            case 'online':
+                row.style.display = isOnline ? '' : 'none';
+                break;
+            case 'offline':
+                row.style.display = !isOnline ? '' : 'none';
+                break;
+        }
+    });
+}
+
+// Поиск агентов
+function searchAgents() {
+    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+    const rows = document.querySelectorAll('#agentsTable tbody tr.agent-row');
+
+    rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(searchTerm) ? '' : 'none';
+    });
+}
+
+// Выделить все
+function toggleSelectAll() {
+    const selectAll = document.getElementById('selectAll');
+    const checkboxes = document.querySelectorAll('.agent-checkbox');
+
+    checkboxes.forEach(checkbox => {
+        checkbox.checked = selectAll.checked;
+    });
+}
+
+// Отправка heartbeat
+async function sendHeartbeat(agentId, event) {
+    if (event) event.stopPropagation();
+
+    try {
+        const response = await fetch(`/api/v1/agents/${agentId}/heartbeat`, {
+            method: 'POST'
+        });
+
+        if (response.ok) {
+            showNotification('Heartbeat отправлен успешно', 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showNotification('Ошибка отправки heartbeat', 'danger');
+        }
+    } catch (error) {
+        showNotification('Ошибка сети: ' + error.message, 'danger');
+    }
+}
+
+// Удаление агента
+async function deleteAgent(agentId, event) {
+    if (event) event.stopPropagation();
+
+    if (!confirm(`Удалить агента ${agentId}?`)) {
+        return;
+    }
+
+    try {
+        const token = getToken();
+        const response = await fetch(`/api/v1/agents/${agentId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+
+        if (response.ok) {
+            showNotification('Агент удален', 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showNotification('Ошибка удаления агента', 'danger');
+        }
+    } catch (error) {
+        showNotification('Ошибка сети: ' + error.message, 'danger');
+    }
+}
+
+// Обновление списка агентов
+function refreshAgents() {
+    location.reload();
+}
+
+// Показать модальное окно добавления
+function showAddAgentModal() {
+    const modal = new bootstrap.Modal(document.getElementById('addAgentModal'));
+    modal.show();
+}
+
+// Экспорт агентов
+function exportAgents() {
+    showNotification('Экспорт в разработке', 'info');
+}
+
+// Настройки отображения
+function showSettings() {
+    showNotification('Настройки в разработке', 'info');
+}
+
+// Получение токена
+function getToken() {
+    const cookies = document.cookie.split(';');
+    for (let cookie of cookies) {
+        const [name, value] = cookie.trim().split('=');
+        if (name === 'access_token') {
+            return value;
+        }
+    }
+    return null;
+}
+
+// Уведомления
+function showNotification(message, type = 'info') {
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+    alert.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+    alert.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    document.body.appendChild(alert);
+
+    setTimeout(() => {
+        if (alert.parentNode) {
+            alert.remove();
+        }
+    }, 5000);
+}
+
+// Поиск при нажатии Enter
+document.getElementById('searchInput').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+        searchAgents();
+    }
+});
+
+// Автообновление каждую минуту
+setInterval(refreshAgents, 60000);
+</script>
 {% endblock %}

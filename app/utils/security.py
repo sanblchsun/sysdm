@@ -21,8 +21,10 @@ except Exception as e:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Проверяет пароль (sha256 для тестирования)"""
     print(f"DEBUG verify_password called")
+    print(f"  plain_password length: {len(plain_password) if plain_password else 0}")
+    print(f"  hashed_password length: {len(hashed_password) if hashed_password else 0}")
     print(f"  plain_password: '{plain_password}'")
-    print(f"  hashed_password from DB: '{hashed_password}'")
+    print(f"  hashed_password: '{hashed_password}'")
 
     if not plain_password or not hashed_password:
         print(f"  ERROR: Missing password or hash")
@@ -60,13 +62,17 @@ def get_password_hash(password: str) -> str:
 # Функции для работы с JWT токенами
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Создает JWT токен"""
+    print(f"DEBUG create_access_token: data={data}")
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=15)
+
+    print(f"DEBUG: expire={expire}")
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    print(f"DEBUG: token created: {encoded_jwt[:50]}...")
     return encoded_jwt
 
 def decode_access_token(token: str):

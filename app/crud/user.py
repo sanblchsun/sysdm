@@ -22,11 +22,26 @@ def create_user(db: Session, user: UserCreate):
 
 def authenticate_user(db: Session, username: str, password: str):
     """Аутентифицирует пользователя"""
+    print(f"DEBUG authenticate_user: username='{username}'")
+
     user = get_user_by_username(db, username)
     if not user:
+        print(f"DEBUG: User '{username}' not found in database")
         return None
-    if not verify_password(password, user.hashed_password):
+
+    print(f"DEBUG: User found: id={user.id}, username={user.username}")
+    print(f"DEBUG: DB hash: {user.hashed_password[:30]}...")
+
+    # Проверяем пароль - только один раз!
+    from app.utils.security import verify_password
+    password_match = verify_password(password, user.hashed_password)
+
+    print(f"DEBUG: Password verification result: {password_match}")
+
+    if not password_match:
         return None
+
+    print(f"DEBUG: Authentication SUCCESS for '{username}'")
     return user
 
 def get_users(db: Session, skip: int = 0, limit: int = 100):

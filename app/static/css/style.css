@@ -1,84 +1,177 @@
-/* app/static/css/style.css */
-/* Кастомные стили для SysDM */
-
+/* Основные стили */
 :root {
-    --primary-color: #2c3e50;
-    --secondary-color: #3498db;
-    --success-color: #27ae60;
-    --danger-color: #e74c3c;
-    --warning-color: #f39c12;
-    --info-color: #3498db;
+    --primary-color: #0d6efd;
+    --secondary-color: #6c757d;
+    --success-color: #198754;
+    --danger-color: #dc3545;
+    --warning-color: #ffc107;
+    --info-color: #0dcaf0;
+    --dark-color: #212529;
+    --light-color: #f8f9fa;
 }
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background-color: #f8f9fa;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
 }
 
-/* Навигация */
-.navbar-brand {
-    font-weight: bold;
-    font-size: 1.5rem;
-}
-
-/* Карточки */
-.card {
+/* Карточка входа */
+.login-card {
     border: none;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    transition: transform 0.2s;
+    border-radius: 15px;
+    overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.1);
 }
 
-.card:hover {
+.login-card .card-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-bottom: none;
+    padding: 2rem 1rem;
+}
+
+.login-card .card-body {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* Форма */
+.form-control {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border-radius: 8px;
+    padding: 12px 15px;
+    transition: all 0.3s;
+}
+
+.form-control:focus {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+    color: white;
+}
+
+.form-control::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.form-label {
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 500;
+}
+
+/* Кнопка входа */
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 8px;
+    padding: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    transition: all 0.3s;
+}
+
+.btn-primary:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
 }
 
-/* Таблицы */
-.table-hover tbody tr:hover {
-    background-color: rgba(52, 152, 219, 0.05);
+/* Чекбокс */
+.form-check-input:checked {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
 }
 
-/* Статус бейджи */
-.badge-online {
-    background-color: var(--success-color);
-    color: white;
+/* Алерты */
+.alert {
+    border-radius: 8px;
+    border: none;
 }
 
-.badge-offline {
-    background-color: var(--danger-color);
-    color: white;
+/* Футер карточки */
+.card-footer {
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.badge-warning {
-    background-color: var(--warning-color);
-    color: white;
+/* Темная тема для других страниц */
+[data-bs-theme="dark"] body:not(.login-page) {
+    background-color: #121212;
+    color: #e0e0e0;
+}
+
+[data-bs-theme="dark"] .navbar {
+    background-color: #1e1e1e !important;
+}
+
+[data-bs-theme="dark"] .card {
+    background-color: #1e1e1e;
+    border-color: #333;
 }
 
 /* Анимации */
-@keyframes pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.7; }
-    100% { opacity: 1; }
+.fade-in {
+    animation: fadeIn 0.5s ease-in;
 }
 
-.pulse {
-    animation: pulse 2s infinite;
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
-/* Утилиты */
-.cursor-pointer {
-    cursor: pointer;
+/* Исправление подвала */
+html, body {
+    height: 100%;
 }
 
-.text-ellipsis {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
 }
 
-/* Графики */
-.chart-container {
-    position: relative;
-    height: 300px;
-    width: 100%;
+main {
+    flex: 1 0 auto;
+}
+
+footer {
+    flex-shrink: 0;
+}
+
+/* Для страницы входа убираем flex */
+.login-page body {
+    display: block;
+}
+
+.login-page main {
+    flex: none;
+}
+
+/* Стили для графика ОС */
+.os-legend {
+    font-size: 0.85rem;
+}
+
+.os-color {
+    min-width: 12px;
+}
+
+/* Анимация для статистических карточек */
+.stat-card {
+    transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.15);
+}
+
+/* Адаптивность для графика */
+@media (max-width: 768px) {
+    #osChart {
+        width: 120px !important;
+        height: 120px !important;
+    }
 }

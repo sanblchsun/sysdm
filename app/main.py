@@ -6,7 +6,7 @@ import logging
 from app.config import settings
 from app.database import engine, Base
 from app.routers import agents_router, auth_router
-from app.web.routes import router as web_router
+from app.web.routes import router as web_router, require_auth
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -20,6 +20,9 @@ app = FastAPI(
     docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None
 )
+
+# Добавляем middleware для аутентификации
+app.middleware("http")(require_auth)
 
 # Настраиваем CORS
 app.add_middleware(
