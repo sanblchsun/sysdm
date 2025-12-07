@@ -1,5 +1,5 @@
 # app/config.py
-from pydantic_settings import BaseSettings
+from pydantic import BaseSettings
 from pydantic import PostgresDsn, validator
 from typing import List
 import secrets
@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     AGENT_HEARTBEAT_INTERVAL: int = 60
     AGENT_TIMEOUT: int = 300
 
+    FIRST_SUPERUSER: str
+    FIRST_SUPERUSER_PASSWORD: str
+
     # === Директории ===
     LOG_DIR: str = "logs"
     UPLOAD_DIR: str = "uploads"
@@ -42,10 +45,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        """Возвращает список origins для CORS middleware"""
-        if not self.CORS_ORIGINS:
-            return []
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
 
     class Config:
         env_file = ".env"
