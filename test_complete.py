@@ -20,7 +20,7 @@ print(f"   ✅ Health: {resp.json()}")
 print("\n2. Аутентификация...")
 resp = requests.post(
     f"{BASE}/api/v1/auth/login-basic",
-    json={"username": "admin", "password": "admin123"}
+    json={"username": "admin", "password": "Ghjuhtcc123"}
 )
 token = resp.json()["access_token"]
 headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -70,6 +70,7 @@ for i, agent_data in enumerate(agents, 1):
     resp = requests.post(
         f"{BASE}/api/v1/agents/register",
         headers=headers,
+
         json=agent_data
     )
     print(f"   ✅ Агент {i}: {agent_data['hostname']} - {resp.status_code}")

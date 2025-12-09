@@ -1,3 +1,4 @@
+
 from pydantic_settings import BaseSettings  # Измененный импорт!
 from typing import List
 import secrets
@@ -8,30 +9,30 @@ class Settings(BaseSettings):
     DATABASE_URL: str
 
     # === Приложение ===
-    APP_TITLE: str = "SysDM"
-    APP_VERSION: str = "1.0.0"
-    DEBUG: bool = False
-    APP_HOST: str = "0.0.0.0"
-    APP_PORT: int = 8000
+    APP_TITLE: str
+    APP_VERSION: str
+    DEBUG: bool
+    APP_HOST: str
+    APP_PORT: int
 
     # === CORS ===
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8080"
+    CORS_ORIGINS: str
 
     # === Безопасность ===
-    SECRET_KEY: str = secrets.token_urlsafe(32)
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    SECRET_KEY: str
+    ALGORITHM: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int
 
     # === Агенты ===
-    AGENT_HEARTBEAT_INTERVAL: int = 60
-    AGENT_TIMEOUT: int = 300
+    AGENT_HEARTBEAT_INTERVAL: int
+    AGENT_TIMEOUT: int
 
-    FIRST_SUPERUSER: str = "admin"
-    FIRST_SUPERUSER_PASSWORD: str = "admin123"
+    FIRST_SUPERUSER: str
+    FIRST_SUPERUSER_PASSWORD: str
 
     # === Директории ===
-    LOG_DIR: str = "logs"
-    UPLOAD_DIR: str = "uploads"
+    LOG_DIR: str
+    UPLOAD_DIR: str
 
     @property
     def cors_origins_list(self) -> List[str]:
