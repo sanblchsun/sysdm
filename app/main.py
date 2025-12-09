@@ -21,9 +21,6 @@ app = FastAPI(
     redoc_url="/redoc" if settings.DEBUG else None
 )
 
-# Добавляем middleware для аутентификации
-app.middleware("http")(require_auth)
-
 # Настраиваем CORS
 app.add_middleware(
     CORSMiddleware,

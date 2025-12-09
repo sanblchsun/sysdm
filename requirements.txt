@@ -30,3 +30,4 @@ requests==2.31.0
 email-validator==2.0.0
 
 passlib
+psutil
