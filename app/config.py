@@ -1,5 +1,5 @@
 
-from pydantic_settings import BaseSettings  # Измененный импорт!
+from pydantic_settings import BaseSettings  # Измененный импорт! для postgres2
 from typing import List
 import secrets
 

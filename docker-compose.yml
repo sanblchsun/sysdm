@@ -2,26 +2,31 @@
 version: '3.8'
 
 services:
-  postgres:
+  db:
     image: postgres:15-alpine
     container_name: sysdm_postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: Ghjuhtcc4410pos
-      POSTGRES_DB: sysdm_db
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+# ⚠️ ПРИ ИЗМЕНЕНИИ ПАРОЛЯ ВЫПОЛНИТЕ:
+# ⚠️ docker-compose exec db psql -U postgres -c "ALTER USER postgres WITH PASSWORD 'НОВЫЙ_ПАРОЛЬ';"
+      POSTGRES_DB: ${DB_NAME}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./init-db:/docker-entrypoint-initdb.d
+    env_file:
+      - .env
     networks:
       - sysdm_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sysdm"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+#    restart: always
 
   app:
     build:
@@ -29,25 +34,22 @@ services:
       dockerfile: Dockerfile
     container_name: sysdm_api
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "${APP_PORT}:${APP_PORT}"
     environment:
       # Основные настройки
-      APP_HOST: ${APP_HOST:-0.0.0.0}
-      APP_PORT: ${APP_PORT:-8000}
-      DEBUG: ${DEBUG:-False}
-
-      # База данных (переопределяет .env при необходимости)
-      # DATABASE_URL: ${DATABASE_URL:-postgresql://sysdm:sysdm_password@postgres:5432/sysdm_db}
-
+      APP_HOST: ${APP_HOST}
+      APP_PORT: ${APP_PORT}
+      DEBUG: ${DEBUG}
+      DATABASE_URL: ${DATABASE_URL}
+      SECRET_KEY: ${SECRET_KEY}
       # Дополнительные переменные
       TZ: ${TZ:-Europe/Moscow}
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
     volumes:
       # Монтируем исходный код для разработки
       - .:/app
-
       # Монтируем логи и загрузки
       - ./logs:/app/logs
       - ./uploads:/app/uploads
@@ -57,6 +59,7 @@ services:
     networks:
       - sysdm_network
     restart: unless-stopped
+#    restart: always
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.sysdm.rule=Host(`sysdm.local`)"
@@ -85,6 +88,9 @@ services:
     volumes:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
+    networks:
+      - sysdm_network
+
 
 
 networks:
