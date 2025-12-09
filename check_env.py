@@ -1,9 +1,12 @@
+# check_env.py
 import os
-from dotenv import load_dotenv
+from app.config import settings
 
-load_dotenv()
+print("=== Environment variables ===")
+print(f"FIRST_SUPERUSER_PASSWORD from .env: {settings.FIRST_SUPERUSER_PASSWORD}")
+print(f"Length: {len(settings.FIRST_SUPERUSER_PASSWORD)}")
+print(f"Raw bytes: {settings.FIRST_SUPERUSER_PASSWORD.encode()}")
 
-print("Проверка переменных окружения из .env:")
-print(f"DATABASE_URL: {os.getenv('DATABASE_URL')}")
-print(f"SECRET_KEY: {os.getenv('SECRET_KEY')[:20]}...")
-print(f"FIRST_SUPERUSER: {os.getenv('FIRST_SUPERUSER')}")
+# Проверьте, есть ли скрытые символы
+for i, char in enumerate(settings.FIRST_SUPERUSER_PASSWORD):
+    print(f"  Character {i}: '{char}' (ASCII: {ord(char)})")

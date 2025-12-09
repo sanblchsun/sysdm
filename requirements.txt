@@ -9,7 +9,7 @@ psycopg2-binary==2.9.9
 
 # Pydantic v2
 pydantic==2.5.0
-pydantic-settings==2.1.0  # Добавляем!
+pydantic-settings==2.1.0
 
 # Аутентификация
 python-jose[cryptography]==3.3.0

@@ -19,10 +19,8 @@ except Exception as e:
     USE_BCRYPT = False
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Проверяет пароль (sha256 для тестирования)"""
+    """Проверяет пароль"""
     print(f"DEBUG verify_password called")
-    print(f"  plain_password length: {len(plain_password) if plain_password else 0}")
-    print(f"  hashed_password length: {len(hashed_password) if hashed_password else 0}")
     print(f"  plain_password: '{plain_password}'")
     print(f"  hashed_password: '{hashed_password}'")
 
@@ -31,16 +29,19 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
     try:
-        # Хешируем введенный пароль
-        test_hash = hashlib.sha256(plain_password.encode()).hexdigest()
-        print(f"  test_hash: '{test_hash}'")
-        print(f"  Match: {test_hash == hashed_password}")
-
-        result = test_hash == hashed_password
-        print(f"  Result: {result}")
-        return result
+        if USE_BCRYPT:
+            # Проверяем через bcrypt
+            result = pwd_context.verify(plain_password, hashed_password)
+            print(f"  Using bcrypt, result: {result}")
+            return result
+        else:
+            # Проверяем через SHA256 (fallback)
+            test_hash = hashlib.sha256(plain_password.encode()).hexdigest()
+            result = test_hash == hashed_password
+            print(f"  Using SHA256, result: {result}")
+            return result
     except Exception as e:
-        print(f"  Exception: {e}")
+        print(f"  Exception in verify_password: {e}")
         return False
 
 def get_password_hash(password: str) -> str:
@@ -52,28 +53,25 @@ def get_password_hash(password: str) -> str:
     if USE_BCRYPT:
         try:
             return pwd_context.hash(password)
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ bcrypt failed, falling back to SHA256: {e}")
             # Fallback на sha256
             return hashlib.sha256(password.encode()).hexdigest()
     else:
         # Используем sha256
         return hashlib.sha256(password.encode()).hexdigest()
 
-# Функции для работы с JWT токенами
+# Функции для работы с JWT токенами (оставить без изменений)
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Создает JWT токен"""
-    print(f"DEBUG create_access_token: data={data}")
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=15)
 
-    print(f"DEBUG: expire={expire}")
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    print(f"DEBUG: token created: {encoded_jwt[:50]}...")
-    return encoded_jwt
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 def decode_access_token(token: str):
     """Декодирует JWT токен"""

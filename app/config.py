@@ -1,4 +1,4 @@
-
+# app/config.py
 from pydantic_settings import BaseSettings  # Измененный импорт! для postgres2
 from typing import List
 import secrets
@@ -6,6 +6,10 @@ import secrets
 
 class Settings(BaseSettings):
     # === База данных ===
+    DB_USER: str
+    DB_PASSWORD: str
+    DB_NAME: str
+    DB_HOST: str
     DATABASE_URL: str
 
     # === Приложение ===

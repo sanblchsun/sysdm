@@ -51,7 +51,8 @@ def create_first_admin():
         traceback.print_exc()
         db.rollback()
     finally:
-        db.close()
+        if db:
+            db.close()
 
 if __name__ == "__main__":
     create_first_admin()
