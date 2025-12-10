@@ -1,9 +1,16 @@
 #!/bin/bash
+# Script for automatic SSL certificate renewal using Docker Compose
 
-LOG="/home/bakor_adm/fastapi-https/renew_ssl.log"
-DEBUG_LOG="/home/bakor_adm/fastapi-https/renew_debug.log"
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Use script directory as WORKDIR
+WORKDIR="$SCRIPT_DIR"
+
+# Other paths relative to WORKDIR
+LOG="$WORKDIR/renew_ssl.log"
+DEBUG_LOG="$WORKDIR/renew_debug.log"
 COMPOSE="/usr/local/bin/docker-compose"
-WORKDIR="/home/bakor_adm/fastapi-https"
 
 echo "[`date`] Starting certificate renewal" >> "$DEBUG_LOG"
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

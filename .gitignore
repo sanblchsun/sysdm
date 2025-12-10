@@ -1,4 +1,5 @@
 # Python
+certbot/
 cookies.txt
 __pycache__/
 *.py[cod]
