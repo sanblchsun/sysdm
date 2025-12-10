@@ -6,7 +6,7 @@ import logging
 from app.config import settings
 from app.database import engine, Base
 from app.routers import agents_router, auth_router
-from app.web.routes import router as web_router, require_auth
+from app.web.routes import router as web_router
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -42,7 +42,9 @@ app.include_router(web_router)
 
 @app.get("/")
 async def root():
-    return {"message": "SysDM API", "version": settings.APP_VERSION}
+    """Корневой путь - редирект на SPA"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/spa")
 
 @app.get("/health")
 async def health_check():
