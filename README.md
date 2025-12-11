@@ -39,7 +39,7 @@ docker-compose up -d --force-recreate nginx
 # Теперь ваш сервис должен быть доступен по https://srvfree.duckdns.org. Сертификаты будут сохранены в ./certbot/conf/live/srvfree.duckdns.org/ на вашем хосте.
 
 # ⚠️ ПРИ ИЗМЕНЕНИИ ПАРОЛЯ супер узера postgres ВЫПОЛНИТЕ:
-# ⚠️ docker-compose exec db psql -U postgres -c "ALTER USER postgres WITH PASSWORD 'НОВЫЙ_ПАРОЛЬ';"
+docker-compose exec db psql -U postgres -c "ALTER USER postgres WITH PASSWORD 'НОВЫЙ_ПАРОЛЬ';"
 docker exec sysdm_postgres env | grep -i postgres
 psql postgresql://postgres:password@host:5432/sysdm_db
 # SysDM - System Management Platform
