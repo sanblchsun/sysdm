@@ -22,7 +22,12 @@ server {
 # Важно: Этот конфиг слушает только порт 80 (HTTP) и содержит критически важный блок location /.well-known/acme-challenge/, который позволяет Certbot подтвердить владение доменом.
 # Шаг 2: Перезапустите Nginx с временным конфигом
 bash
-docker-compose up -d --force-recreate nginx
+# 1. Остановить и удалить ТОЛЬКО контейнер nginx
+docker-compose stop nginx
+docker-compose rm -f nginx
+
+# 2. Запустить ТОЛЬКО сервис nginx (он автоматически создаст новый контейнер)
+docker-compose up -d nginx
 # Шаг 3: Выполните команду получения первого сертификата
 Запустите контейнер certbot, чтобы запросить сертификат. Все необходимые папки уже смонтированы в вашем docker-compose.yml.
 bash
