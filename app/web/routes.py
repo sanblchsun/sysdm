@@ -1,4 +1,4 @@
-# app/web/routes.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
+# app/web/routes.py
 import json
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Request, Depends, HTTPException, status, Form, Query
@@ -9,7 +9,17 @@ from app.database import get_db
 from app.crud.user import authenticate_user, get_user_by_username
 from app.utils.security import create_access_token, decode_access_token
 from app.config import settings
-from app.crud.agent import *
+from app.crud.agent import (
+    get_agents,
+    get_agent_by_agent_id,
+    get_agents_statistics,
+    get_online_agents,
+    create_agent,
+    update_agent,
+    delete_agent,
+    update_agent_heartbeat,
+    search_agents
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
