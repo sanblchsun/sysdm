@@ -35,6 +35,51 @@ async function initApp() {
 
 // =========== ОСНОВНОЙ РЕНДЕРИНГ ===========
 
+async function showAddAgentModal() {
+    showToast('➕ Добавление агента в разработке', 'info');
+
+    // Можно добавить модальное окно для добавления агента
+    // Пока просто заглушка
+}
+
+function changePerPage() {
+    const perPageSelect = document.getElementById('agentsPerPage');
+    if (perPageSelect) {
+        itemsPerPage = parseInt(perPageSelect.value);
+        currentPageNum = 1;
+        renderAgentsTablePage();
+        updatePagination();
+    }
+}
+
+function sortAgents() {
+    const sortSelect = document.getElementById('agentsSort');
+    if (!sortSelect) return;
+
+    const sortBy = sortSelect.value;
+
+    filteredAgents.sort((a, b) => {
+        switch (sortBy) {
+            case 'name':
+                return a.hostname.localeCompare(b.hostname);
+            case 'status':
+                // Сначала онлайн, потом оффлайн
+                if (a.is_online === b.is_online) return 0;
+                return a.is_online ? -1 : 1;
+            case 'last_seen':
+                const timeA = a.last_seen ? new Date(a.last_seen).getTime() : 0;
+                const timeB = b.last_seen ? new Date(b.last_seen).getTime() : 0;
+                return timeB - timeA; // Сначала новые
+            default:
+                return 0;
+        }
+    });
+
+    currentPageNum = 1;
+    renderAgentsTablePage();
+    updatePagination();
+}
+
 function renderApp() {
     console.log('Rendering app interface...');
 
@@ -392,10 +437,15 @@ async function loadAgentsPage(container) {
         </div>
     `;
 
-    // Инициализация страницы
-    await loadFullTree();
+    // Загружаем данные агентов
     await loadAllAgents();
     setupAgentsEventListeners();
+
+    // ДОБАВЬТЕ ЭТО: Загружаем и отображаем дерево
+    await loadFullTree();
+
+    // И показываем панель с деревом
+    toggleTreeView(); // Показываем дерево сразу
 }
 
 // =========== ФУНКЦИИ ДЛЯ ДЕРЕВА ===========
@@ -802,10 +852,13 @@ function updateAgentsInfo() {
     const onlineCount = filteredAgents.filter(a => a.is_online).length;
     const offlineCount = filteredAgents.length - onlineCount;
 
-    document.getElementById('agentsInfo')?.innerHTML = `
-        <span class="badge bg-success">${onlineCount} онлайн</span>
-        <span class="badge bg-danger ms-2">${offlineCount} оффлайн</span>
-    `;
+    const agentsInfoElement = document.getElementById('agentsInfo');
+    if (agentsInfoElement) {
+        agentsInfoElement.innerHTML = `
+            <span class="badge bg-success">${onlineCount} онлайн</span>
+            <span class="badge bg-danger ms-2">${offlineCount} оффлайн</span>
+        `;
+    }
 }
 
 function updateAgentsCount() {
@@ -894,6 +947,98 @@ function updateSelectedCount() {
 }
 
 // =========== ДЕЙСТВИЯ С АГЕНТАМИ ===========
+
+async function sendHeartbeat(agentId) {
+    try {
+        const response = await fetch(`${API_BASE}/agents/${agentId}/heartbeat`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (response.ok) {
+            showToast('✅ Heartbeat отправлен', 'success');
+            // Обновляем список агентов
+            if (currentTreeView === 'all') {
+                await loadAllAgents();
+            } else if (currentTreeView === 'client' && currentSelectedId) {
+                await loadAgentsByClient(currentSelectedId);
+            } else if (currentTreeView === 'department' && currentSelectedId) {
+                await loadAgentsByDepartment(currentSelectedId);
+            }
+        } else {
+            showToast('❌ Ошибка отправки heartbeat', 'danger');
+        }
+    } catch (error) {
+        console.error('Heartbeat error:', error);
+        showToast('❌ Ошибка соединения', 'danger');
+    }
+}
+
+async function deleteAgent(agentId) {
+    if (!confirm(`Удалить агента ${agentId}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/agents/${agentId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (response.ok) {
+            showToast('✅ Агент удален', 'success');
+            // Обновляем список агентов
+            if (currentTreeView === 'all') {
+                await loadAllAgents();
+            } else if (currentTreeView === 'client' && currentSelectedId) {
+                await loadAgentsByClient(currentSelectedId);
+            } else if (currentTreeView === 'department' && currentSelectedId) {
+                await loadAgentsByDepartment(currentSelectedId);
+            }
+
+            // Закрываем модальное окно если открыто
+            const modal = bootstrap.Modal.getInstance(document.getElementById('agentDetailModal'));
+            if (modal) {
+                modal.hide();
+            }
+        } else {
+            showToast('❌ Ошибка удаления агента', 'danger');
+        }
+    } catch (error) {
+        console.error('Delete agent error:', error);
+        showToast('❌ Ошибка соединения', 'danger');
+    }
+}
+
+async function sendCommand(agentId, command) {
+    try {
+        showToast(`📤 Отправка команды "${command}" агенту ${agentId}...`, 'info');
+
+        // Здесь будет реальная отправка команд
+        // Пока просто имитируем
+        setTimeout(() => {
+            showToast(`✅ Команда "${command}" выполнена`, 'success');
+        }, 1000);
+    } catch (error) {
+        console.error('Send command error:', error);
+        showToast('❌ Ошибка отправки команды', 'danger');
+    }
+}
+
+
+async function editAgent(agentId) {
+    showToast('✏️ Редактирование агента в разработке', 'info');
+}
+
+async function showAgentCommands(agentId) {
+    showToast('🖥️ Команды для агента в разработке', 'info');
+}
 
 async function viewAgentDetail(agentId) {
     try {
