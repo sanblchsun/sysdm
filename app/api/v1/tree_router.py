@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import List
 
 from app.database import get_db
 from app import crud
@@ -98,7 +98,6 @@ async def get_agents_by_client(
         return []
 
     # Получаем всех агентов для этих отделов
-    from app.crud.agent import get_agents
     all_agents = []
 
     for dept_id in department_ids:

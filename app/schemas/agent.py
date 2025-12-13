@@ -1,8 +1,11 @@
 # app/schemas/agent.py
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import Optional, Dict, Any
-from app.schemas.department import Department
+from typing import Optional, Dict, Any, TYPE_CHECKING
+
+# Импортируем только типы для аннотаций
+if TYPE_CHECKING:
+    from app.schemas.department import Department
 
 class AgentBase(BaseModel):
     hostname: str
@@ -22,7 +25,6 @@ class AgentBase(BaseModel):
     site_id: Optional[str] = None
     description: Optional[str] = None
     notes: Optional[str] = None
-    # ЗАМЕНА: department -> department_id
     department_id: Optional[int] = None
 
 class AgentCreate(AgentBase):
@@ -37,4 +39,8 @@ class Agent(AgentBase):
     model_config = ConfigDict(from_attributes=True)
 
 class AgentWithDepartment(Agent):
-    department: Optional[Department] = None
+    department: Optional['Department'] = None
+
+# Импортируем после определения
+from app.schemas.department import Department
+AgentWithDepartment.update_forward_refs()

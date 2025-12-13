@@ -1,7 +1,11 @@
 # app/schemas/client.py
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
+
+# Импортируем только типы для аннотаций
+if TYPE_CHECKING:
+    from app.schemas.department import Department, DepartmentTree
 
 class ClientBase(BaseModel):
     name: str
@@ -21,3 +25,8 @@ class ClientWithDepartments(Client):
 
 class ClientTree(Client):
     departments: List['DepartmentTree'] = []
+
+# Импортируем после определения, чтобы избежать циклических импортов
+from app.schemas.department import Department, DepartmentTree
+ClientWithDepartments.update_forward_refs()
+ClientTree.update_forward_refs()
