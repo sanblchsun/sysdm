@@ -1,17 +1,23 @@
-// app/static/js/app.js - ПОЛНАЯ ВЕРСИЯ С СТРАНИЦЕЙ АГЕНТОВ
+// app/static/js/app.js - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ С ДЕРЕВОМ
 const API_BASE = '/api/v1';
 let authToken = null;
 let currentUser = null;
 let currentPage = 'dashboard';
 
+// =========== ИНИЦИАЛИЗАЦИЯ ===========
+
 // Инициализация приложения
 async function initApp() {
+    console.log('Initializing app...');
+
     // Проверяем наличие токена
     authToken = localStorage.getItem('sysdm_token') || getCookie('access_token');
 
     if (authToken) {
         try {
+            console.log('Found token, fetching user info...');
             currentUser = await fetchWithAuth(`${API_BASE}/auth/me`);
+            console.log('User authenticated:', currentUser.username);
             renderApp();
             loadPageFromHash();
         } catch (error) {
@@ -19,6 +25,7 @@ async function initApp() {
             showLoginPage();
         }
     } else {
+        console.log('No token found, showing login page');
         showLoginPage();
     }
 
@@ -29,13 +36,15 @@ async function initApp() {
 // =========== ОСНОВНОЙ РЕНДЕРИНГ ===========
 
 function renderApp() {
+    console.log('Rendering app interface...');
+
     document.getElementById('app').innerHTML = `
         <div class="app-container">
             <!-- Сайдбар -->
             <div class="sidebar">
                 <div class="sidebar-header">
                     <h5><i class="bi bi-server text-primary me-2"></i>SysDM</h5>
-                    <small class="text-muted">v${window.SYSDM_CONFIG.app_version}</small>
+                    <small class="text-muted">v${window.SYSDM_CONFIG?.app_version || '1.0.0'}</small>
                 </div>
 
                 <nav class="sidebar-nav">
@@ -87,6 +96,7 @@ function renderApp() {
 // =========== СТРАНИЦЫ ===========
 
 async function loadPage(page) {
+    console.log('Loading page:', page);
     currentPage = page;
     const content = document.getElementById('content');
 
@@ -116,6 +126,7 @@ async function loadPage(page) {
 
 async function loadDashboard(container) {
     try {
+        console.log('Loading dashboard...');
         const stats = await fetchWithAuth(`${API_BASE}/dashboard/stats`);
 
         container.innerHTML = `
@@ -179,22 +190,22 @@ async function loadDashboard(container) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    ${stats.recent_agents.map(agent => `
+                                    ${(stats.recent_agents || []).map(agent => `
                                         <tr>
                                             <td>
-                                                <strong>${agent.hostname}</strong><br>
-                                                <small class="text-muted">${agent.agent_id}</small>
+                                                <strong>${escapeHtml(agent.hostname)}</strong><br>
+                                                <small class="text-muted">${escapeHtml(agent.agent_id)}</small>
                                             </td>
                                             <td>
                                                 ${agent.is_online
                                                     ? '<span class="badge bg-success"><i class="bi bi-check-circle"></i> Онлайн</span>'
                                                     : '<span class="badge bg-danger"><i class="bi bi-x-circle"></i> Оффлайн</span>'}
                                             </td>
-                                            <td>${agent.local_ip || 'N/A'}</td>
-                                            <td><span class="badge bg-secondary">${agent.platform || 'unknown'}</span></td>
+                                            <td>${escapeHtml(agent.local_ip || 'N/A')}</td>
+                                            <td><span class="badge bg-secondary">${escapeHtml(agent.platform || 'unknown')}</span></td>
                                             <td>${agent.last_seen ? formatDateTime(agent.last_seen) : 'Никогда'}</td>
                                             <td>
-                                                <button class="btn btn-sm btn-outline-primary" onclick="viewAgentDetail('${agent.agent_id}')">
+                                                <button class="btn btn-sm btn-outline-primary" onclick="viewAgentDetail('${escapeHtml(agent.agent_id)}')">
                                                     <i class="bi bi-eye"></i>
                                                 </button>
                                             </td>
@@ -208,15 +219,18 @@ async function loadDashboard(container) {
             </div>
         `;
     } catch (error) {
+        console.error('Dashboard error:', error);
         container.innerHTML = `
             <div class="alert alert-danger">
-                <i class="bi bi-exclamation-triangle"></i> Ошибка загрузки дашборда: ${error.message}
+                <i class="bi bi-exclamation-triangle"></i> Ошибка загрузки дашборда: ${escapeHtml(error.message)}
             </div>
         `;
     }
 }
 
 async function loadAgentsPage(container) {
+    console.log('Loading agents page with tree view...');
+
     container.innerHTML = `
         <div class="agents-page">
             <!-- Шапка -->
@@ -224,96 +238,139 @@ async function loadAgentsPage(container) {
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
                         <h2><i class="bi bi-pc-display me-2"></i>Агенты</h2>
-                        <p class="text-muted">Управление всеми агентами системы</p>
+                        <p class="text-muted" id="currentViewTitle">Все агенты системы</p>
                     </div>
                     <div class="d-flex gap-2">
-                        <button class="btn btn-primary" onclick="refreshAgents()">
+                        <button class="btn btn-outline-primary" onclick="refreshAgents()" id="refreshBtn">
                             <i class="bi bi-arrow-clockwise"></i> Обновить
                         </button>
                         <button class="btn btn-success" onclick="showAddAgentModal()">
                             <i class="bi bi-plus-circle"></i> Добавить агента
                         </button>
+                        <button class="btn btn-info" onclick="toggleTreeView()" id="toggleTreeBtn">
+                            <i class="bi bi-list-tree"></i> Показать дерево
+                        </button>
                     </div>
                 </div>
             </div>
 
-            <!-- Фильтры и поиск -->
-            <div class="card mb-4">
-                <div class="card-body">
-                    <div class="row g-3">
-                        <div class="col-md-4">
-                            <div class="input-group">
-                                <span class="input-group-text"><i class="bi bi-search"></i></span>
-                                <input type="text" class="form-control" id="agentsSearch" placeholder="Поиск по имени, ID или IP..." oninput="filterAgents()">
+            <div class="row">
+                <!-- Левая панель: Дерево клиентов (изначально скрыта) -->
+                <div class="col-md-4 d-none" id="treePanel">
+                    <div class="card h-100">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Иерархия</h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadFullTree()">
+                                <i class="bi bi-arrow-clockwise"></i>
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="p-3 border-bottom">
+                                <div class="input-group">
+                                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                    <input type="text" class="form-control" id="treeSearch"
+                                           placeholder="Поиск в дереве..." oninput="searchInTree()">
+                                </div>
+                            </div>
+                            <div id="clientTreeContainer" style="height: 600px; overflow-y: auto; padding: 15px;">
+                                <div class="text-center py-5">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">Загрузка...</span>
+                                    </div>
+                                    <p class="mt-2">Загрузка иерархии...</p>
+                                </div>
                             </div>
                         </div>
-                        <div class="col-md-2">
-                            <select class="form-select" id="agentsStatusFilter" onchange="filterAgents()">
-                                <option value="all">Все статусы</option>
-                                <option value="online">Только онлайн</option>
-                                <option value="offline">Только оффлайн</option>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <select class="form-select" id="agentsPlatformFilter" onchange="filterAgents()">
-                                <option value="all">Все платформы</option>
-                                <option value="windows">Windows</option>
-                                <option value="linux">Linux</option>
-                                <option value="macos">macOS</option>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <select class="form-select" id="agentsSort" onchange="sortAgents()">
-                                <option value="name">Сортировка: По имени</option>
-                                <option value="status">По статусу</option>
-                                <option value="last_seen">По активности</option>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <select class="form-select" id="agentsPerPage" onchange="changePerPage()">
-                                <option value="10">10 на странице</option>
-                                <option value="25" selected>25 на странице</option>
-                                <option value="50">50 на странице</option>
-                                <option value="100">100 на странице</option>
-                            </select>
+                        <div class="card-footer text-muted">
+                            <small><i class="bi bi-info-circle"></i> Кликните на отдел для просмотра агентов</small>
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <!-- Таблица агентов -->
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">Список агентов</h5>
-                    <span class="text-muted" id="agentsInfo">Загрузка...</span>
-                </div>
-                <div class="card-body p-0">
-                    <div class="table-responsive">
-                        <table class="table table-hover mb-0">
-                            <thead>
-                                <tr>
-                                    <th width="50"></th>
-                                    <th>Агент</th>
-                                    <th>IP адрес</th>
-                                    <th>Платформа</th>
-                                    <th>ОС</th>
-                                    <th>Ресурсы</th>
-                                    <th>Активность</th>
-                                    <th>Действия</th>
-                                </tr>
-                            </thead>
-                            <tbody id="agentsTableBody">
-                                <!-- Данные будут загружены здесь -->
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-                <div class="card-footer">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div id="paginationInfo"></div>
-                        <nav aria-label="Навигация">
-                            <ul class="pagination pagination-sm mb-0" id="agentsPagination"></ul>
-                        </nav>
+                <!-- Правая панель: Агенты -->
+                <div class="col-md-12" id="agentsPanel">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <div>
+                                <h5 class="mb-0" id="agentsPanelTitle">
+                                    <i class="bi bi-pc-display me-2"></i>Все агенты
+                                </h5>
+                                <small class="text-muted" id="agentsCountText">Загрузка...</small>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <!-- Фильтры -->
+                                <select class="form-select form-select-sm w-auto" id="agentsStatusFilter" onchange="filterAgents()">
+                                    <option value="all">Все статусы</option>
+                                    <option value="online">Только онлайн</option>
+                                    <option value="offline">Только оффлайн</option>
+                                </select>
+                                <select class="form-select form-select-sm w-auto" id="agentsPlatformFilter" onchange="filterAgents()">
+                                    <option value="all">Все платформы</option>
+                                    <option value="windows">Windows</option>
+                                    <option value="linux">Linux</option>
+                                    <option value="macos">macOS</option>
+                                </select>
+                                <div class="input-group input-group-sm" style="width: 200px;">
+                                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                    <input type="text" class="form-control" id="agentsSearch"
+                                           placeholder="Поиск агентов...">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-body p-0">
+                            <!-- Таблица агентов -->
+                            <div class="table-responsive">
+                                <table class="table table-hover mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th width="50">
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" id="selectAllAgents">
+                                                </div>
+                                            </th>
+                                            <th>Имя хоста</th>
+                                            <th>Статус</th>
+                                            <th>IP адрес</th>
+                                            <th>Отдел</th>
+                                            <th>Платформа</th>
+                                            <th>Ресурсы</th>
+                                            <th>Последняя активность</th>
+                                            <th>Действия</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="agentsTableBody">
+                                        <tr>
+                                            <td colspan="9" class="text-center py-5">
+                                                <div class="spinner-border text-primary" role="status">
+                                                    <span class="visually-hidden">Загрузка...</span>
+                                                </div>
+                                                <p class="mt-2">Загрузка агентов...</p>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="card-footer">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <button class="btn btn-sm btn-outline-secondary me-2" onclick="bulkAssignDepartment()">
+                                        <i class="bi bi-folder-plus"></i> Назначить отдел
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="bulkDeleteAgents()">
+                                        <i class="bi bi-trash"></i> Удалить выбранные
+                                    </button>
+                                </div>
+                                <div class="d-flex align-items-center">
+                                    <span class="me-3" id="selectedCountText">Выбрано: 0</span>
+                                    <nav aria-label="Навигация по страницам">
+                                        <ul class="pagination pagination-sm mb-0" id="agentsPagination">
+                                            <!-- Пагинация будет добавлена динамически -->
+                                        </ul>
+                                    </nav>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -335,190 +392,370 @@ async function loadAgentsPage(container) {
         </div>
     `;
 
-    // Загружаем данные агентов
-    await loadAgentsData();
+    // Инициализация страницы
+    await loadFullTree();
+    await loadAllAgents();
+    setupAgentsEventListeners();
 }
 
-// =========== ЗАГРУЗКА И ФИЛЬТРАЦИЯ АГЕНТОВ ===========
+// =========== ФУНКЦИИ ДЛЯ ДЕРЕВА ===========
+
+let currentTreeView = 'all'; // 'all', 'client', 'department'
+let currentSelectedId = null;
+
+async function loadFullTree() {
+    try {
+        const container = document.getElementById('clientTreeContainer');
+        container.innerHTML = `
+            <div class="text-center py-4">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Загрузка...</span>
+                </div>
+                <p class="mt-2">Загрузка иерархии...</p>
+            </div>
+        `;
+
+        const data = await fetchWithAuth('/api/v1/tree/clients-tree');
+        console.log('Tree data loaded:', data);
+        renderClientTree(data);
+    } catch (error) {
+        console.error('Ошибка загрузки дерева:', error);
+        document.getElementById('clientTreeContainer').innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> Ошибка загрузки дерева: ${escapeHtml(error.message)}
+            </div>
+        `;
+    }
+}
+
+function renderClientTree(clients) {
+    const container = document.getElementById('clientTreeContainer');
+
+    if (!clients || clients.length === 0) {
+        container.innerHTML = `
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle"></i> Нет клиентов для отображения
+            </div>
+        `;
+        return;
+    }
+
+    let html = '<div class="tree">';
+
+    clients.forEach(client => {
+        html += `
+            <div class="tree-node client-node" data-id="client_${client.id}" data-type="client">
+                <div class="tree-item" onclick="selectTreeNode('client', ${client.id})">
+                    <i class="bi bi-building tree-icon"></i>
+                    <span class="tree-label">${escapeHtml(client.name)}</span>
+                    <span class="badge bg-secondary ms-2">${client.departments?.length || 0}</span>
+                </div>
+                <div class="tree-children">
+        `;
+
+        // Рекурсивная функция для отображения отделов
+        function renderDepartments(departments, level = 0) {
+            let deptHtml = '';
+            departments.forEach(dept => {
+                const padding = 20 + (level * 20);
+                deptHtml += `
+                    <div class="tree-node department-node" data-id="dept_${dept.id}" data-type="department"
+                         style="margin-left: ${padding}px;">
+                        <div class="tree-item" onclick="selectTreeNode('department', ${dept.id}, ${dept.client_id})">
+                            <i class="bi bi-folder tree-icon"></i>
+                            <span class="tree-label">${escapeHtml(dept.name)}</span>
+                            <span class="badge bg-info ms-2">${countAgentsInDepartment(dept)}</span>
+                        </div>
+                        <div class="tree-children">
+                `;
+
+                if (dept.children && dept.children.length > 0) {
+                    deptHtml += renderDepartments(dept.children, level + 1);
+                }
+
+                deptHtml += '</div></div>';
+            });
+            return deptHtml;
+        }
+
+        if (client.departments && client.departments.length > 0) {
+            html += renderDepartments(client.departments);
+        }
+
+        html += '</div></div>';
+    });
+
+    html += '</div>';
+    container.innerHTML = html;
+
+    // Добавляем обработчики для раскрытия/сворачивания
+    document.querySelectorAll('.tree-item').forEach(item => {
+        item.addEventListener('click', function(e) {
+            if (e.target.closest('.tree-label') || e.target.closest('.tree-icon')) {
+                const node = this.parentElement;
+                const children = node.querySelector('.tree-children');
+                if (children) {
+                    children.classList.toggle('collapsed');
+                    const icon = this.querySelector('.tree-icon');
+                    if (icon) {
+                        if (children.classList.contains('collapsed')) {
+                            icon.classList.remove('bi-folder');
+                            icon.classList.add('bi-folder2');
+                        } else {
+                            icon.classList.remove('bi-folder2');
+                            icon.classList.add('bi-folder');
+                        }
+                    }
+                }
+            }
+        });
+    });
+}
+
+function countAgentsInDepartment(department) {
+    // Эта функция должна считать агентов в отделе
+    // Пока возвращаем 0, можно будет улучшить когда будет статистика
+    return department.agents_count || 0;
+}
+
+function selectTreeNode(type, id, clientId = null) {
+    console.log('Selected tree node:', type, id);
+    currentTreeView = type;
+    currentSelectedId = id;
+
+    // Обновляем выделение в дереве
+    document.querySelectorAll('.tree-item').forEach(item => {
+        item.classList.remove('selected');
+    });
+
+    const selectedNode = document.querySelector(`[data-id="${type}_${id}"] .tree-item`);
+    if (selectedNode) {
+        selectedNode.classList.add('selected');
+    }
+
+    // Загружаем соответствующих агентов
+    if (type === 'client') {
+        loadAgentsByClient(id);
+    } else if (type === 'department') {
+        loadAgentsByDepartment(id);
+    }
+}
+
+async function loadAgentsByClient(clientId) {
+    try {
+        updateUIForLoading(`Агенты клиента`, true);
+        const agents = await fetchWithAuth(`/api/v1/tree/clients/${clientId}/agents`);
+        console.log('Agents by client:', agents);
+        renderAgentsTable(agents);
+        updateUIAfterLoading(`Агенты клиента`, agents.length);
+    } catch (error) {
+        console.error('Ошибка загрузки агентов клиента:', error);
+        showError('Ошибка загрузки агентов клиента');
+    }
+}
+
+async function loadAgentsByDepartment(departmentId) {
+    try {
+        updateUIForLoading(`Агенты отдела`, true);
+        const agents = await fetchWithAuth(`/api/v1/tree/departments/${departmentId}/agents`);
+        console.log('Agents by department:', agents);
+        renderAgentsTable(agents);
+        updateUIAfterLoading(`Агенты отдела`, agents.length);
+    } catch (error) {
+        console.error('Ошибка загрузки агентов отдела:', error);
+        showError('Ошибка загрузки агентов отдела');
+    }
+}
+
+async function loadAllAgents() {
+    try {
+        updateUIForLoading('Все агенты', true);
+        const agents = await fetchWithAuth('/api/v1/agents/search?limit=1000');
+        console.log('All agents loaded:', agents.length);
+        renderAgentsTable(agents);
+        updateUIAfterLoading('Все агенты', agents.length);
+    } catch (error) {
+        console.error('Ошибка загрузки всех агентов:', error);
+        showError('Ошибка загрузки агентов');
+    }
+}
+
+function updateUIForLoading(title, showSpinner = true) {
+    document.getElementById('agentsPanelTitle').innerHTML = `
+        <i class="bi bi-pc-display me-2"></i>${escapeHtml(title)}
+    `;
+    document.getElementById('agentsCountText').textContent = 'Загрузка...';
+
+    if (showSpinner) {
+        document.getElementById('agentsTableBody').innerHTML = `
+            <tr>
+                <td colspan="9" class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Загрузка...</span>
+                    </div>
+                    <p class="mt-2">Загрузка агентов...</p>
+                </td>
+            </tr>
+        `;
+    }
+}
+
+function updateUIAfterLoading(title, count) {
+    document.getElementById('agentsCountText').textContent = `Найдено: ${count} агентов`;
+    document.getElementById('currentViewTitle').textContent = title;
+}
+
+// =========== ТАБЛИЦА АГЕНТОВ ===========
 
 let allAgents = [];
 let filteredAgents = [];
 let currentPageNum = 1;
 let itemsPerPage = 25;
 
-async function loadAgentsData() {
-    try {
-        allAgents = await fetchWithAuth(`${API_BASE}/agents/search?limit=1000`);
-        filteredAgents = [...allAgents];
-        renderAgentsTable();
-        updateAgentsInfo();
-    } catch (error) {
-        console.error('Error loading agents:', error);
-        document.getElementById('agentsTableBody').innerHTML = `
+function renderAgentsTable(agents) {
+    const tbody = document.getElementById('agentsTableBody');
+    allAgents = agents;
+    filteredAgents = [...agents];
+    currentPageNum = 1;
+
+    renderAgentsTablePage();
+    updatePagination();
+    updateSelectedCount();
+}
+
+function renderAgentsTablePage() {
+    const tbody = document.getElementById('agentsTableBody');
+
+    if (!filteredAgents || filteredAgents.length === 0) {
+        tbody.innerHTML = `
             <tr>
-                <td colspan="8" class="text-center py-4">
-                    <div class="alert alert-danger">
-                        <i class="bi bi-exclamation-triangle"></i> Ошибка загрузки агентов: ${error.message}
+                <td colspan="9" class="text-center py-5">
+                    <div class="text-muted">
+                        <i class="bi bi-inbox fs-1"></i>
+                        <p class="mt-2">Агенты не найдены</p>
                     </div>
                 </td>
             </tr>
         `;
+        return;
     }
-}
-
-function renderAgentsTable() {
-    const tbody = document.getElementById('agentsTableBody');
 
     // Пагинация
     const startIndex = (currentPageNum - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
     const pageAgents = filteredAgents.slice(startIndex, endIndex);
 
-    if (pageAgents.length === 0) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="8" class="text-center py-4">
-                    <div class="text-muted">
-                        <i class="bi bi-inbox display-4 d-block mb-2"></i>
-                        <h5>Агенты не найдены</h5>
-                        <p>Попробуйте изменить параметры поиска</p>
+    let html = '';
+
+    pageAgents.forEach(agent => {
+        const lastSeen = agent.last_seen ?
+            new Date(agent.last_seen).toLocaleString() : 'Никогда';
+
+        html += `
+            <tr data-agent-id="${agent.id}">
+                <td>
+                    <div class="form-check">
+                        <input class="form-check-input agent-checkbox" type="checkbox" value="${agent.id}">
+                    </div>
+                </td>
+                <td>
+                    <div class="d-flex align-items-center">
+                        <div class="status-indicator ${agent.is_online ? 'online' : 'offline'} me-2"></div>
+                        <div>
+                            <strong>${escapeHtml(agent.hostname)}</strong><br>
+                            <small class="text-muted">${escapeHtml(agent.agent_id)}</small>
+                        </div>
+                    </div>
+                </td>
+                <td>
+                    ${agent.is_online ?
+                        '<span class="badge bg-success"><i class="bi bi-check-circle"></i> Онлайн</span>' :
+                        '<span class="badge bg-danger"><i class="bi bi-x-circle"></i> Оффлайн</span>'}
+                </td>
+                <td>${escapeHtml(agent.local_ip || 'N/A')}</td>
+                <td>
+                    ${agent.department ?
+                        `<span class="badge bg-secondary">${escapeHtml(agent.department.name)}</span>` :
+                        '<span class="text-muted">Не назначен</span>'}
+                </td>
+                <td><span class="badge bg-info">${escapeHtml(agent.platform || 'unknown')}</span></td>
+                <td>
+                    <small>
+                        CPU: ${agent.cpu_cores || '?'} ядер<br>
+                        RAM: ${agent.total_ram ? Math.round(agent.total_ram / 1024) + ' GB' : '?'}
+                    </small>
+                </td>
+                <td>
+                    <small>${lastSeen}</small>
+                </td>
+                <td>
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-primary" onclick="viewAgentDetail('${escapeHtml(agent.agent_id)}')">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                        <button class="btn btn-outline-warning" onclick="editAgent(${agent.id})">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="btn btn-outline-info" onclick="showAgentCommands('${escapeHtml(agent.agent_id)}')">
+                            <i class="bi bi-terminal"></i>
+                        </button>
                     </div>
                 </td>
             </tr>
         `;
-        return;
-    }
-
-    tbody.innerHTML = pageAgents.map(agent => `
-        <tr>
-            <td>
-                ${agent.is_online
-                    ? '<i class="bi bi-circle-fill text-success" title="Онлайн"></i>'
-                    : '<i class="bi bi-circle-fill text-danger" title="Оффлайн"></i>'}
-            </td>
-            <td>
-                <div class="fw-bold">${agent.hostname}</div>
-                <small class="text-muted">ID: ${agent.agent_id}</small>
-                ${agent.description ? `<br><small class="text-muted">${agent.description}</small>` : ''}
-            </td>
-            <td>
-                ${agent.local_ip || '<span class="text-muted">N/A</span>'}
-            </td>
-            <td>
-                <span class="badge ${getPlatformBadgeClass(agent.platform)}">
-                    ${agent.platform || 'unknown'}
-                </span>
-            </td>
-            <td>
-                <small>${agent.operating_system || 'Неизвестно'}</small>
-            </td>
-            <td>
-                <small>${agent.cpu_cores || '?'} ядер</small><br>
-                <small>${agent.total_ram ? formatBytes(agent.total_ram * 1024 * 1024) : '?'} RAM</small>
-            </td>
-            <td>
-                <small>${agent.last_seen ? formatDateTime(agent.last_seen) : 'Никогда'}</small><br>
-                <small class="text-muted">Создан: ${agent.created_at ? formatDate(agent.created_at) : 'N/A'}</small>
-            </td>
-            <td>
-                <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary" onclick="showAgentDetail('${agent.agent_id}')" title="Детали">
-                        <i class="bi bi-eye"></i>
-                    </button>
-                    <button class="btn btn-outline-success" onclick="sendHeartbeat('${agent.agent_id}')" title="Отправить heartbeat">
-                        <i class="bi bi-heart-pulse"></i>
-                    </button>
-                    <button class="btn btn-outline-danger" onclick="deleteAgent('${agent.agent_id}')" title="Удалить">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                </div>
-            </td>
-        </tr>
-    `).join('');
-
-    // Обновляем пагинацию
-    updatePagination();
-}
-
-function filterAgents() {
-    const searchTerm = document.getElementById('agentsSearch').value.toLowerCase();
-    const statusFilter = document.getElementById('agentsStatusFilter').value;
-    const platformFilter = document.getElementById('agentsPlatformFilter').value;
-
-    filteredAgents = allAgents.filter(agent => {
-        // Поиск по тексту
-        const searchMatch = !searchTerm ||
-            agent.agent_id.toLowerCase().includes(searchTerm) ||
-            agent.hostname.toLowerCase().includes(searchTerm) ||
-            (agent.local_ip && agent.local_ip.toLowerCase().includes(searchTerm)) ||
-            (agent.description && agent.description.toLowerCase().includes(searchTerm));
-
-        // Фильтр по статусу
-        let statusMatch = true;
-        if (statusFilter === 'online') {
-            statusMatch = agent.is_online === true;
-        } else if (statusFilter === 'offline') {
-            statusMatch = agent.is_online === false;
-        }
-
-        // Фильтр по платформе
-        let platformMatch = true;
-        if (platformFilter !== 'all' && agent.platform) {
-            platformMatch = agent.platform.toLowerCase() === platformFilter.toLowerCase();
-        }
-
-        return searchMatch && statusMatch && platformMatch;
     });
 
-    currentPageNum = 1;
-    renderAgentsTable();
+    tbody.innerHTML = html;
     updateAgentsInfo();
 }
 
-function sortAgents() {
-    const sortBy = document.getElementById('agentsSort').value;
+function filterAgents() {
+    const statusFilter = document.getElementById('agentsStatusFilter').value;
+    const platformFilter = document.getElementById('agentsPlatformFilter').value;
+    const searchTerm = document.getElementById('agentsSearch').value.toLowerCase();
 
-    filteredAgents.sort((a, b) => {
-        switch (sortBy) {
-            case 'name':
-                return a.hostname.localeCompare(b.hostname);
-            case 'status':
-                return (b.is_online === a.is_online) ? 0 : b.is_online ? 1 : -1;
-            case 'last_seen':
-                const timeA = a.last_seen ? new Date(a.last_seen).getTime() : 0;
-                const timeB = b.last_seen ? new Date(b.last_seen).getTime() : 0;
-                return timeB - timeA;
-            default:
-                return 0;
+    filteredAgents = allAgents.filter(agent => {
+        const status = agent.is_online ? 'online' : 'offline';
+        const platform = agent.platform ? agent.platform.toLowerCase() : '';
+        const hostname = agent.hostname ? agent.hostname.toLowerCase() : '';
+        const agentId = agent.agent_id ? agent.agent_id.toLowerCase() : '';
+        const ip = agent.local_ip ? agent.local_ip.toLowerCase() : '';
+
+        let show = true;
+
+        // Фильтр по статусу
+        if (statusFilter !== 'all') {
+            if (statusFilter !== status) show = false;
         }
+
+        // Фильтр по платформе
+        if (platformFilter !== 'all') {
+            if (!platform.includes(platformFilter)) show = false;
+        }
+
+        // Поиск
+        if (searchTerm && !hostname.includes(searchTerm) &&
+            !agentId.includes(searchTerm) && !ip.includes(searchTerm)) {
+            show = false;
+        }
+
+        return show;
     });
 
-    renderAgentsTable();
-}
-
-function changePerPage() {
-    itemsPerPage = parseInt(document.getElementById('agentsPerPage').value);
     currentPageNum = 1;
-    renderAgentsTable();
+    renderAgentsTablePage();
+    updatePagination();
 }
 
 function updatePagination() {
     const totalPages = Math.ceil(filteredAgents.length / itemsPerPage);
     const pagination = document.getElementById('agentsPagination');
-    const paginationInfo = document.getElementById('paginationInfo');
 
     if (totalPages <= 1) {
         pagination.innerHTML = '';
-        paginationInfo.textContent = '';
         return;
     }
 
-    // Информация о странице
-    const startItem = (currentPageNum - 1) * itemsPerPage + 1;
-    const endItem = Math.min(currentPageNum * itemsPerPage, filteredAgents.length);
-    paginationInfo.textContent = `Показано ${startItem}-${endItem} из ${filteredAgents.length}`;
-
-    // Кнопки пагинации
     let html = '';
 
     // Предыдущая страница
@@ -557,7 +794,7 @@ function updatePagination() {
 
 function changePage(page) {
     currentPageNum = page;
-    renderAgentsTable();
+    renderAgentsTablePage();
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -565,7 +802,7 @@ function updateAgentsInfo() {
     const onlineCount = filteredAgents.filter(a => a.is_online).length;
     const offlineCount = filteredAgents.length - onlineCount;
 
-    document.getElementById('agentsInfo').innerHTML = `
+    document.getElementById('agentsInfo')?.innerHTML = `
         <span class="badge bg-success">${onlineCount} онлайн</span>
         <span class="badge bg-danger ms-2">${offlineCount} оффлайн</span>
     `;
@@ -577,16 +814,94 @@ function updateAgentsCount() {
     }
 }
 
-// =========== ДЕТАЛИ АГЕНТА ===========
+// =========== УПРАВЛЕНИЕ ДЕРЕВОМ ===========
 
-async function showAgentDetail(agentId) {
+function toggleTreeView() {
+    const treePanel = document.getElementById('treePanel');
+    const agentsPanel = document.getElementById('agentsPanel');
+    const toggleBtn = document.getElementById('toggleTreeBtn');
+
+    if (treePanel.classList.contains('d-none')) {
+        // Показываем дерево
+        treePanel.classList.remove('d-none');
+        treePanel.classList.add('col-md-4');
+        agentsPanel.classList.remove('col-md-12');
+        agentsPanel.classList.add('col-md-8');
+        toggleBtn.innerHTML = '<i class="bi bi-list"></i> Скрыть дерево';
+    } else {
+        // Скрываем дерево
+        treePanel.classList.add('d-none');
+        treePanel.classList.remove('col-md-4');
+        agentsPanel.classList.remove('col-md-8');
+        agentsPanel.classList.add('col-md-12');
+        toggleBtn.innerHTML = '<i class="bi bi-list-tree"></i> Показать дерево';
+    }
+}
+
+function searchInTree() {
+    const searchTerm = document.getElementById('treeSearch').value.toLowerCase();
+    const treeNodes = document.querySelectorAll('.tree-node');
+
+    treeNodes.forEach(node => {
+        const label = node.querySelector('.tree-label');
+        if (label) {
+            const text = label.textContent.toLowerCase();
+            if (searchTerm === '' || text.includes(searchTerm)) {
+                node.style.display = '';
+                // Показываем родительские элементы
+                let parent = node.parentElement;
+                while (parent && parent.classList.contains('tree-children')) {
+                    parent.parentElement.style.display = '';
+                    parent = parent.parentElement.parentElement;
+                }
+            } else {
+                node.style.display = 'none';
+            }
+        }
+    });
+}
+
+// =========== ОБРАБОТЧИКИ СОБЫТИЙ ===========
+
+function setupAgentsEventListeners() {
+    // Выделение всех агентов
+    document.getElementById('selectAllAgents')?.addEventListener('change', function() {
+        const checkboxes = document.querySelectorAll('.agent-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = this.checked;
+        });
+        updateSelectedCount();
+    });
+
+    // Обновление счетчика выбранных
+    document.addEventListener('change', function(e) {
+        if (e.target.classList.contains('agent-checkbox')) {
+            updateSelectedCount();
+        }
+    });
+
+    // Поиск агентов с задержкой
+    let searchTimeout;
+    document.getElementById('agentsSearch')?.addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(filterAgents, 300);
+    });
+}
+
+function updateSelectedCount() {
+    const selected = document.querySelectorAll('.agent-checkbox:checked').length;
+    document.getElementById('selectedCountText').textContent = `Выбрано: ${selected}`;
+}
+
+// =========== ДЕЙСТВИЯ С АГЕНТАМИ ===========
+
+async function viewAgentDetail(agentId) {
     try {
         const agent = await fetchWithAuth(`${API_BASE}/agents/${agentId}`);
 
-        document.getElementById('agentDetailTitle').textContent = `Агент: ${agent.hostname}`;
+        document.getElementById('agentDetailTitle').textContent = `Агент: ${escapeHtml(agent.hostname)}`;
         document.getElementById('agentDetailContent').innerHTML = `
             <div class="row">
-                <!-- Левая колонка -->
                 <div class="col-md-6">
                     <div class="card mb-3">
                         <div class="card-header">
@@ -596,11 +911,11 @@ async function showAgentDetail(agentId) {
                             <table class="table table-sm">
                                 <tr>
                                     <td width="40%"><strong>ID агента:</strong></td>
-                                    <td><code>${agent.agent_id}</code></td>
+                                    <td><code>${escapeHtml(agent.agent_id)}</code></td>
                                 </tr>
                                 <tr>
                                     <td><strong>Хостнейм:</strong></td>
-                                    <td>${agent.hostname}</td>
+                                    <td>${escapeHtml(agent.hostname)}</td>
                                 </tr>
                                 <tr>
                                     <td><strong>Статус:</strong></td>
@@ -610,98 +925,19 @@ async function showAgentDetail(agentId) {
                                             : '<span class="badge bg-danger"><i class="bi bi-x-circle"></i> Оффлайн</span>'}
                                     </td>
                                 </tr>
-                                <tr>
-                                    <td><strong>IP адрес:</strong></td>
-                                    <td>${agent.local_ip || 'Не указан'}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Операционная система:</strong></td>
-                                    <td>${agent.operating_system || 'Неизвестно'}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Платформа:</strong></td>
-                                    <td><span class="badge ${getPlatformBadgeClass(agent.platform)}">${agent.platform || 'unknown'}</span></td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Версия агента:</strong></td>
-                                    <td>${agent.agent_version || '1.0.0'}</td>
-                                </tr>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <div class="card-header">
-                            <h6 class="mb-0">Аппаратное обеспечение</h6>
-                        </div>
-                        <div class="card-body">
-                            <table class="table table-sm">
-                                <tr>
-                                    <td width="40%"><strong>Процессор:</strong></td>
-                                    <td>${agent.cpu_info || 'Неизвестно'}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Ядра:</strong></td>
-                                    <td>${agent.cpu_cores || 'Неизвестно'}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Память:</strong></td>
-                                    <td>${agent.total_ram ? formatBytes(agent.total_ram * 1024 * 1024) : 'Неизвестно'}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Диски:</strong></td>
-                                    <td>${agent.disks_info || 'Неизвестно'}</td>
-                                </tr>
                             </table>
                         </div>
                     </div>
                 </div>
-
-                <!-- Правая колонка -->
                 <div class="col-md-6">
                     <div class="card mb-3">
-                        <div class="card-header">
-                            <h6 class="mb-0">Активность</h6>
-                        </div>
-                        <div class="card-body">
-                            <table class="table table-sm">
-                                <tr>
-                                    <td width="40%"><strong>Создан:</strong></td>
-                                    <td>${agent.created_at ? formatDateTime(agent.created_at) : 'Неизвестно'}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Последняя активность:</strong></td>
-                                    <td>${agent.last_seen ? formatDateTime(agent.last_seen) : 'Никогда'}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Время работы:</strong></td>
-                                    <td>${agent.uptime || 'Неизвестно'}</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>Описание:</strong></td>
-                                    <td>${agent.description || 'Нет описания'}</td>
-                                </tr>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="card">
                         <div class="card-header">
                             <h6 class="mb-0">Действия</h6>
                         </div>
                         <div class="card-body">
                             <div class="d-grid gap-2">
-                                <button class="btn btn-primary" onclick="sendCommand('${agent.agent_id}', 'ping')">
-                                    <i class="bi bi-wifi"></i> Отправить Ping
-                                </button>
-                                <button class="btn btn-secondary" onclick="sendCommand('${agent.agent_id}', 'restart')">
-                                    <i class="bi bi-arrow-clockwise"></i> Перезапустить агента
-                                </button>
-                                <button class="btn btn-warning" onclick="sendCommand('${agent.agent_id}', 'update')">
-                                    <i class="bi bi-cloud-arrow-down"></i> Обновить агента
-                                </button>
-                                <button class="btn btn-danger" onclick="deleteAgentWithConfirm('${agent.agent_id}')">
-                                    <i class="bi bi-trash"></i> Удалить агента
+                                <button class="btn btn-primary" onclick="sendHeartbeat('${escapeHtml(agent.agent_id)}')">
+                                    <i class="bi bi-heart-pulse"></i> Отправить heartbeat
                                 </button>
                             </div>
                         </div>
@@ -711,78 +947,50 @@ async function showAgentDetail(agentId) {
         `;
 
         // Показываем модальное окно
-        const modal = new bootstrap.Modal(document.getElementById('agentDetailModal'));
-        modal.show();
-    } catch (error) {
-        alert(`Ошибка загрузки деталей агента: ${error.message}`);
-    }
-}
-
-// =========== ДЕЙСТВИЯ С АГЕНТАМИ ===========
-
-async function sendHeartbeat(agentId) {
-    try {
-        const response = await fetch(`${API_BASE}/agents/${agentId}/heartbeat`, {
-            method: 'POST'
-        });
-
-        if (response.ok) {
-            showToast('✅ Heartbeat отправлен', 'success');
-            await loadAgentsData();
-        } else {
-            showToast('❌ Ошибка отправки heartbeat', 'danger');
+        const modalElement = document.getElementById('agentDetailModal');
+        if (modalElement) {
+            const modal = new bootstrap.Modal(modalElement);
+            modal.show();
         }
     } catch (error) {
-        console.error('Heartbeat error:', error);
-        showToast('❌ Ошибка соединения', 'danger');
+        console.error('Error loading agent details:', error);
+        showToast(`Ошибка загрузки деталей агента: ${error.message}`, 'danger');
     }
 }
 
-async function deleteAgent(agentId) {
-    if (confirm(`Удалить агента ${agentId}?`)) {
-        try {
-            const response = await fetchWithAuth(`${API_BASE}/agents/${agentId}`, {
-                method: 'DELETE'
-            });
+function bulkAssignDepartment() {
+    const selectedIds = Array.from(document.querySelectorAll('.agent-checkbox:checked'))
+        .map(cb => cb.value);
 
-            if (response.ok) {
-                showToast('✅ Агент удален', 'success');
-                await loadAgentsData();
-
-                // Закрываем модальное окно если оно открыто
-                const modal = bootstrap.Modal.getInstance(document.getElementById('agentDetailModal'));
-                if (modal) modal.hide();
-            } else {
-                showToast('❌ Ошибка удаления агента', 'danger');
-            }
-        } catch (error) {
-            console.error('Delete agent error:', error);
-            showToast('❌ Ошибка соединения', 'danger');
-        }
+    if (selectedIds.length === 0) {
+        showError('Выберите хотя бы одного агента');
+        return;
     }
+
+    showToast(`Выбрано ${selectedIds.length} агентов для назначения отдела`, 'info');
 }
 
-function deleteAgentWithConfirm(agentId) {
-    if (confirm(`Вы уверены, что хотите удалить агента ${agentId}?\nЭто действие нельзя отменить.`)) {
-        deleteAgent(agentId);
-        const modal = bootstrap.Modal.getInstance(document.getElementById('agentDetailModal'));
-        if (modal) modal.hide();
+function bulkDeleteAgents() {
+    const selectedIds = Array.from(document.querySelectorAll('.agent-checkbox:checked'))
+        .map(cb => cb.value);
+
+    if (selectedIds.length === 0) {
+        showError('Выберите хотя бы одного агента');
+        return;
     }
-}
 
-async function sendCommand(agentId, command) {
-    showToast(`📤 Команда "${command}" отправлена агенту ${agentId}`, 'info');
-    // Здесь можно добавить реальную отправку команд
-}
-
-function showAddAgentModal() {
-    showToast('📝 Функция добавления агента в разработке', 'info');
-    // Здесь можно добавить модальное окно добавления агента
+    if (confirm(`Удалить ${selectedIds.length} выбранных агентов?`)) {
+        showToast(`Запрос на удаление ${selectedIds.length} агентов отправлен`, 'warning');
+    }
 }
 
 // =========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===========
 
 async function fetchWithAuth(url, options = {}) {
+    if (!authToken) {
+        throw new Error('Not authenticated');
+    }
+
     const headers = {
         'Authorization': `Bearer ${authToken}`,
         'Content-Type': 'application/json',
@@ -794,6 +1002,7 @@ async function fetchWithAuth(url, options = {}) {
     if (response.status === 401) {
         // Неавторизован
         localStorage.removeItem('sysdm_token');
+        authToken = null;
         showLoginPage();
         throw new Error('Not authenticated');
     }
@@ -810,18 +1019,27 @@ function getCookie(name) {
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
     if (parts.length === 2) return parts.pop().split(';').shift();
+    return null;
 }
 
 function formatDateTime(dateString) {
     if (!dateString) return 'Никогда';
-    const date = new Date(dateString);
-    return date.toLocaleString('ru-RU');
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleString('ru-RU');
+    } catch (e) {
+        return dateString;
+    }
 }
 
 function formatDate(dateString) {
     if (!dateString) return 'N/A';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('ru-RU');
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleDateString('ru-RU');
+    } catch (e) {
+        return dateString;
+    }
 }
 
 function formatBytes(bytes, decimals = 2) {
@@ -833,21 +1051,17 @@ function formatBytes(bytes, decimals = 2) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
-function getPlatformBadgeClass(platform) {
-    if (!platform) return 'bg-secondary';
-
-    const platformLower = platform.toLowerCase();
-    if (platformLower.includes('windows')) return 'bg-primary';
-    if (platformLower.includes('linux')) return 'bg-success';
-    if (platformLower.includes('mac') || platformLower.includes('darwin')) return 'bg-info';
-    return 'bg-secondary';
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 function renderSimplePage(title, content) {
     return `
         <div class="page-header mb-4">
-            <h2>${title}</h2>
-            <p class="text-muted">${content}</p>
+            <h2>${escapeHtml(title)}</h2>
+            <p class="text-muted">${escapeHtml(content)}</p>
         </div>
     `;
 }
@@ -882,11 +1096,15 @@ function showToast(message, type = 'info') {
     document.body.appendChild(toast);
 
     // Автоматическое удаление через 3 секунды
-    window.setTimeout(function() {        // <-- ИСПРАВЛЕННАЯ СТРОКА
+    setTimeout(function() {
         if (toast.parentElement) {
             toast.remove();
         }
     }, 3000);
+}
+
+function showError(message) {
+    showToast(message, 'danger');
 }
 
 // =========== НАВИГАЦИЯ ===========
@@ -916,6 +1134,8 @@ function loadPageFromHash() {
 // =========== АВТОРИЗАЦИЯ ===========
 
 function showLoginPage() {
+    console.log('Showing login page');
+
     document.getElementById('app').innerHTML = `
         <div class="login-container">
             <div class="login-card">
@@ -946,7 +1166,7 @@ function showLoginPage() {
                 </form>
 
                 <div class="mt-3 text-center">
-                    <small class="text-muted">Версия ${window.SYSDM_CONFIG.app_version}</small>
+                    <small class="text-muted">Версия ${window.SYSDM_CONFIG?.app_version || '1.0.0'}</small>
                 </div>
             </div>
         </div>
@@ -999,7 +1219,26 @@ async function logout() {
 }
 
 function refreshAgents() {
-    loadAgentsData();
+    const btn = document.getElementById('refreshBtn');
+    if (btn) {
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Обновление...';
+        btn.disabled = true;
+
+        setTimeout(() => {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }, 1000);
+    }
+
+    if (currentTreeView === 'all') {
+        loadAllAgents();
+    } else if (currentTreeView === 'client' && currentSelectedId) {
+        loadAgentsByClient(currentSelectedId);
+    } else if (currentTreeView === 'department' && currentSelectedId) {
+        loadAgentsByDepartment(currentSelectedId);
+    }
+
     showToast('🔄 Список агентов обновляется...', 'info');
 }
 
@@ -1007,7 +1246,7 @@ function refreshAgents() {
 
 // Экспортируем функции в глобальную область видимости
 window.loadPage = loadPage;
-window.viewAgentDetail = showAgentDetail;
+window.viewAgentDetail = viewAgentDetail;
 window.sendHeartbeat = sendHeartbeat;
 window.deleteAgent = deleteAgent;
 window.sendCommand = sendCommand;
@@ -1019,6 +1258,12 @@ window.sortAgents = sortAgents;
 window.changePerPage = changePerPage;
 window.handleLogin = handleLogin;
 window.logout = logout;
+window.loadFullTree = loadFullTree;
+window.selectTreeNode = selectTreeNode;
+window.toggleTreeView = toggleTreeView;
+window.searchInTree = searchInTree;
+window.bulkAssignDepartment = bulkAssignDepartment;
+window.bulkDeleteAgents = bulkDeleteAgents;
 
 // Запускаем приложение
 document.addEventListener('DOMContentLoaded', initApp);
