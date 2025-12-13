@@ -1,8 +1,8 @@
 # app/routers/agents_router.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.crud.agent import crud_agent
-from app.schemas.agent import AgentCreate, AgentResponse
+from app.crud.agent import *
+from app.schemas.agent import AgentCreate, Agent
 from app.database import SessionLocal
 import traceback
 
@@ -28,7 +28,7 @@ def register_agent(
         print(f"DEBUG: Registering agent: {agent.agent_id}, {agent.hostname}")
 
         # Проверяем существование агента
-        existing = crud_agent.get_agent(db, agent.agent_id)
+        existing = get_agent(db, agent.agent_id)
         if existing:
             # Обновляем существующего агента
             print(f"DEBUG: Updating existing agent: {agent.agent_id}")
@@ -52,7 +52,7 @@ def register_agent(
 
         # Создаем нового агента
         print(f"DEBUG: Creating new agent: {agent.agent_id}")
-        db_agent = crud_agent.create_agent(db, agent)
+        db_agent = get_agent.create_agent(db, agent)
         if db_agent:
             return {
                 "id": db_agent.id,
@@ -73,7 +73,7 @@ def register_agent(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/{agent_id}/heartbeat", response_model=AgentResponse)
+@router.post("/{agent_id}/heartbeat", response_model=Agent)
 def update_heartbeat(
     agent_id: str,
     db: Session = Depends(get_db)
@@ -81,7 +81,7 @@ def update_heartbeat(
 ):
     """Обновляет время последней активности агента (публичный эндпоинт)"""
     try:
-        agent = crud_agent.update_heartbeat(db, agent_id)
+        agent = update_heartbeat(db, agent_id)
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
         return agent

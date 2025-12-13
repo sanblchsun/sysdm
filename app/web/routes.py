@@ -9,7 +9,7 @@ from app.database import get_db
 from app.crud.user import authenticate_user, get_user_by_username
 from app.utils.security import create_access_token, decode_access_token
 from app.config import settings
-from app.crud.agent import crud_agent
+from app.crud.agent import *
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -139,7 +139,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
     # Получаем агентов
-    agents = crud_agent.get_agents(db, limit=100)
+    agents = get_agents(db, limit=100)
     online_agents = [a for a in agents if a.is_online]
     offline_agents = [a for a in agents if not a.is_online]
 
@@ -167,7 +167,7 @@ async def web_agents_list(request: Request, db: Session = Depends(get_db)):
     if not token or not decode_access_token(token):
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
-    agents = crud_agent.get_agents(db, limit=100)
+    agents = get_agents(db, limit=100)
 
     context = get_template_context(request, {
         "page_title": "Агенты",
@@ -329,7 +329,7 @@ async def get_dashboard_stats(
     # current_user = Depends(get_current_user_api)  # Временно отключаем аутентификацию
 ):
     """Получить статистику для дашборда"""
-    agents = crud_agent.get_agents(db, limit=1000)
+    agents = get_agents(db, limit=1000)
 
     online_count = sum(1 for a in agents if a.is_online)
     warning_count = sum(1 for a in agents if getattr(a, 'has_warnings', False))
@@ -365,7 +365,7 @@ async def search_agents(
     # current_user = Depends(get_current_user_api)  # Временно отключаем
 ):
     """Поиск и фильтрация агентов"""
-    agents = crud_agent.get_agents(db, skip=skip, limit=limit)
+    agents = get_agents(db, skip=skip, limit=limit)
 
     # Фильтрация
     filtered_agents = []
