@@ -6,8 +6,8 @@ from fastapi.staticfiles import StaticFiles
 import logging
 from app.config import settings
 from app.database import engine, Base
-from app.api.v1 import agents_router, auth_router
 from app.web.routes import router as web_router
+from app.api.v1 import agents_router, auth_router, tree_router
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # Подключаем роутеры API
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(agents_router, prefix="/api/v1/agents", tags=["agents"])
+app.include_router(tree_router, prefix="/api/v1/tree", tags=["tree"])
 
 # Подключаем веб-роутер
 app.include_router(web_router)

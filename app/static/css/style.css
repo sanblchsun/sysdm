@@ -578,3 +578,118 @@ body.login-page {
         margin: 10px;
     }
 }
+
+/* ДОБАВЛЯЕМ В КОНЕЦ ФАЙЛА style.css */
+
+/* =========== СТИЛИ ДЛЯ ДЕРЕВА =========== */
+
+.tree {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    user-select: none;
+}
+
+.tree-node {
+    margin-bottom: 2px;
+}
+
+.tree-item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: all 0.2s;
+    border: 1px solid transparent;
+}
+
+.tree-item:hover {
+    background: rgba(13, 110, 253, 0.1);
+    border-color: rgba(13, 110, 253, 0.2);
+}
+
+.tree-item.selected {
+    background: rgba(13, 110, 253, 0.15);
+    border-color: #0d6efd;
+    color: #0d6efd;
+}
+
+.tree-item.selected .tree-icon {
+    color: #0d6efd;
+}
+
+.tree-icon {
+    margin-right: 10px;
+    font-size: 1.1rem;
+    width: 20px;
+    text-align: center;
+    color: #6c757d;
+    transition: transform 0.2s;
+}
+
+.client-node .tree-icon {
+    color: #0dcaf0;
+}
+
+.department-node .tree-icon {
+    color: #ffc107;
+}
+
+.tree-label {
+    flex: 1;
+    font-weight: 500;
+    font-size: 0.95rem;
+}
+
+.tree-children {
+    margin-left: 20px;
+    padding-left: 10px;
+    border-left: 1px dashed #444;
+}
+
+.tree-children.collapsed {
+    display: none;
+}
+
+/* Анимация раскрытия */
+.tree-children {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Индикаторы для дерева */
+.tree-badge {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    margin-left: 8px;
+}
+
+/* Поиск в дереве */
+.tree-search-highlight {
+    background-color: rgba(255, 193, 7, 0.3);
+    padding: 0 2px;
+    border-radius: 2px;
+}
+
+/* Загрузка дерева */
+.tree-loading {
+    text-align: center;
+    padding: 40px 20px;
+    color: #6c757d;
+}
+
+.tree-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: #6c757d;
+    font-style: italic;
+}
+
+/* Адаптивность дерева */
+@media (max-width: 768px) {
+    .tree-children {
+        margin-left: 10px;
+    }
+
+    .tree-item {
+        padding: 6px 8px;
+    }
+}
