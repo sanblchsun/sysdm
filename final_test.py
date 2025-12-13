@@ -32,7 +32,7 @@ print("\n🔐 2. Аутентификация...")
 try:
     resp = requests.post(
         f"{BASE}/api/v1/auth/login",
-        data={"username": "admin", "password": "112233"}
+        data={"username": "admin", "password": "Ghjuhtcc123"}
     )
 
     if resp.status_code == 200:

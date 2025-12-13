@@ -6,15 +6,12 @@ let currentPage = 'dashboard';
 
 // Инициализация приложения
 async function initApp() {
-    console.log('🚀 Initializing SysDM SPA...');
-
     // Проверяем наличие токена
     authToken = localStorage.getItem('sysdm_token') || getCookie('access_token');
 
     if (authToken) {
         try {
             currentUser = await fetchWithAuth(`${API_BASE}/auth/me`);
-            console.log('✅ User authenticated:', currentUser.username);
             renderApp();
             loadPageFromHash();
         } catch (error) {
@@ -32,8 +29,6 @@ async function initApp() {
 // =========== ОСНОВНОЙ РЕНДЕРИНГ ===========
 
 function renderApp() {
-    console.log('🔄 Rendering application...');
-
     document.getElementById('app').innerHTML = `
         <div class="app-container">
             <!-- Сайдбар -->
@@ -92,7 +87,6 @@ function renderApp() {
 // =========== СТРАНИЦЫ ===========
 
 async function loadPage(page) {
-    console.log(`📄 Loading page: ${page}`);
     currentPage = page;
     const content = document.getElementById('content');
 
@@ -223,8 +217,6 @@ async function loadDashboard(container) {
 }
 
 async function loadAgentsPage(container) {
-    console.log('🔄 Loading agents page...');
-
     container.innerHTML = `
         <div class="agents-page">
             <!-- Шапка -->
@@ -356,10 +348,7 @@ let itemsPerPage = 25;
 
 async function loadAgentsData() {
     try {
-        console.log('📡 Loading agents data...');
         allAgents = await fetchWithAuth(`${API_BASE}/agents/search?limit=1000`);
-        console.log(`✅ Loaded ${allAgents.length} agents`);
-
         filteredAgents = [...allAgents];
         renderAgentsTable();
         updateAgentsInfo();
@@ -885,7 +874,7 @@ function showToast(message, type = 'info') {
     `;
     toast.innerHTML = `
         <div class="d-flex align-items-center">
-            <div class="flex-grow-1">${message}</div>
+            <div class="flex-grow-1">${escapeHtml(message)}</div>
             <button type="button" class="btn-close btn-close-white ms-2" onclick="this.parentElement.parentElement.remove()"></button>
         </div>
     `;
@@ -893,7 +882,7 @@ function showToast(message, type = 'info') {
     document.body.appendChild(toast);
 
     // Автоматическое удаление через 3 секунды
-    setTimeout(() => {
+    window.setTimeout(function() {        // <-- ИСПРАВЛЕННАЯ СТРОКА
         if (toast.parentElement) {
             toast.remove();
         }
