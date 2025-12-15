@@ -67,3 +67,7 @@ docker-compose up -d
 
 # Открыть в браузере
 open http://localhost:8000/docs
+
+
+# ⚠️ ПРИ ИЗМЕНЕНИИ ПАРОЛЯ К POSTGRES ВЫПОЛНИТЕ:
+docker-compose exec db psql -U postgres -c "ALTER USER postgres WITH PASSWORD 'НОВЫЙ_ПАРОЛЬ';"

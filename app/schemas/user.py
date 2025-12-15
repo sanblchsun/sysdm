@@ -1,3 +1,4 @@
+import re
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 
@@ -14,8 +15,24 @@ class UserBase(BaseModel):
         return v
 
 
+
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=12)
+
+    @field_validator('password')
+    @classmethod
+    def validate_password_strength(cls, v):
+        if len(v) < 12:
+            raise ValueError('Password must be at least 12 characters')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Must contain at least one lowercase letter')
+        if not re.search(r'\d', v):
+            raise ValueError('Must contain at least one digit')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
+            raise ValueError('Must contain at least one special character')
+        return v
 
 class UserLogin(BaseModel):
     username: str

@@ -5,6 +5,8 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from app.config import settings
 import hashlib
+import logging
+logger = logging.getLogger(__name__)
 
 # Инициализируем контекст хеширования
 try:
@@ -18,30 +20,17 @@ except Exception as e:
     print(f"⚠️ bcrypt не работает, используем sha256 как fallback: {e}")
     USE_BCRYPT = False
 
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Проверяет пароль"""
-    print(f"DEBUG verify_password called")
-    print(f"  plain_password: '{plain_password}'")
-    print(f"  hashed_password: '{hashed_password}'")
-
     if not plain_password or not hashed_password:
-        print(f"  ERROR: Missing password or hash")
+        logger.warning("Password verification called with empty data")
         return False
 
     try:
-        if USE_BCRYPT:
-            # Проверяем через bcrypt
-            result = pwd_context.verify(plain_password, hashed_password)
-            print(f"  Using bcrypt, result: {result}")
-            return result
-        else:
-            # Проверяем через SHA256 (fallback)
-            test_hash = hashlib.sha256(plain_password.encode()).hexdigest()
-            result = test_hash == hashed_password
-            print(f"  Using SHA256, result: {result}")
-            return result
+        return pwd_context.verify(plain_password, hashed_password)
     except Exception as e:
-        print(f"  Exception in verify_password: {e}")
+        logger.error(f"Password verification error: {e}")
         return False
 
 def get_password_hash(password: str) -> str:
