@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import ping, auth, web_cookie, agents
 from app.config import settings
 from fastapi.staticfiles import StaticFiles
-from app.middleware.token_validation import AutoRenewalMiddleware
+from app.middleware.token_validation import TokenValidationMiddleware
 
 app = FastAPI(
     title=settings.APP_TITLE,
@@ -25,7 +25,7 @@ if settings.CORS_ORIGINS:
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Регистрируем middleware
-app.add_middleware(AutoRenewalMiddleware)
+app.add_middleware(TokenValidationMiddleware)
 app.include_router(agents.router)  # /agents
 app.include_router(auth.router, prefix="/auth")  # /auth/*
 app.include_router(ping.router)  # /ping
