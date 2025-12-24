@@ -1,33 +1,20 @@
-# Основные
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+fastapi==0.125.0
+uvicorn[standard]==0.38.0
 
 # База данных
-sqlalchemy==2.0.23
-alembic==1.12.1
-psycopg2-binary==2.9.9
+sqlalchemy==2.0.45
+alembic==1.17.2
+asyncpg==0.31.0
 
 # Pydantic v2
-pydantic==2.5.0
-pydantic-settings==2.1.0
+pydantic==2.12.5
+pydantic-settings==2.12.0
 
 # Аутентификация
-python-jose[cryptography]==3.3.0
+authx==1.4.3
 bcrypt==4.0.1
+passlib==1.7.4
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.21
 
-# Конфигурация
-python-dotenv==1.0.0
-
-# Утилиты
-httpx==0.25.1
-
-# Веб-интерфейс
-jinja2==3.1.2
-python-multipart==0.0.6
-requests==2.31.0
-
-# Для email валидации
-email-validator==2.0.0
-
-passlib
-psutil
+jinja2==3.1.6

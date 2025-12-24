@@ -3,7 +3,7 @@
 # SysDM - System Management Docker Image
 # ============================================
 
-FROM python:3.10.4-slim
+FROM python:3.12.3-slim
 
 WORKDIR /app
 

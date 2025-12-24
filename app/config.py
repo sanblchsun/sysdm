@@ -1,7 +1,6 @@
 # app/config.py
-from pydantic_settings import BaseSettings  # Измененный импорт! для postgres2
-from typing import List
-import secrets
+from typing import ClassVar
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -10,7 +9,6 @@ class Settings(BaseSettings):
     DB_PASSWORD: str
     DB_NAME: str
     DB_HOST: str
-    DATABASE_URL: str
 
     # === Приложение ===
     APP_TITLE: str
@@ -24,7 +22,7 @@ class Settings(BaseSettings):
 
     # === Безопасность ===
     SECRET_KEY: str
-    ALGORITHM: str
+    # ALGORITHM: ClassVar[str] = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int
 
     # === Агенты ===
@@ -39,12 +37,10 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str
 
     @property
-    def cors_origins_list(self) -> List[str]:
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
+    def DATABASE_URL(self):
+        return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:5432/{self.DB_NAME}"
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(env_file=".env")
 
 
-settings = Settings()
+settings = Settings()  # type: ignore
