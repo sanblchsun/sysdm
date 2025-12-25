@@ -3,7 +3,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from app.middleware.token_validation import TokenValidationMiddleware
-from app.api import ping, auth, agents, web_cookie
+from app.api import ping, auth, web_cookie
 import os
 
 app = FastAPI(title="SystemDM API")
