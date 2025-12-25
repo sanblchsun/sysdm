@@ -15,6 +15,8 @@ from app.config import settings
 config = AuthXConfig()
 config.JWT_SECRET_KEY = settings.SECRET_KEY
 config.JWT_ALGORITHM = "HS256"
+config.JWT_TOKEN_LOCATION = ["cookies"]
+
 
 security = AuthX(config=config)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
