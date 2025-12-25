@@ -5,8 +5,8 @@ from authx import AuthX, AuthXConfig
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from datetime import timedelta
-
+from datetime import datetime, timedelta
+from loguru import logger
 from app.database import get_session
 from app.models.users import User
 from app.config import settings
@@ -77,8 +77,6 @@ async def get_current_admin_user(
     return current_user
 
 
-def create_access_token(data: dict):
+def create_access_token(sub: str):
     """Создать JWT токен"""
-    uid = data.get("sub", "")
-    expire_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return security.create_access_token(uid=uid, expiry=expire_delta)
+    return security.create_access_token(uid=sub)

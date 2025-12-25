@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     # === Безопасность ===
     SECRET_KEY: str
     # ALGORITHM: ClassVar[str] = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int
 
     # === Агенты ===
     AGENT_HEARTBEAT_INTERVAL: int

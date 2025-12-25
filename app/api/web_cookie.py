@@ -43,7 +43,7 @@ async def login_submit(
 
     # Создаем JWT токен
     logger.error("Токен делался в app/api/web_cookie.py ")
-    token = create_access_token(data={"sub": user.username})
+    token = create_access_token(sub=str(user.username))
 
     # Перенаправляем на страницу агентов с установкой cookie
     response = RedirectResponse(url="/agents", status_code=302)
@@ -51,7 +51,6 @@ async def login_submit(
         key="access_token",
         value=token,
         httponly=True,
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         samesite="lax",
     )
     return response
