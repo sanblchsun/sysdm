@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from passlib.context import CryptContext
-
+from loguru import logger
 from app.database import get_session
 from app.models.users import User
 from app.core.auth import (
@@ -37,30 +37,6 @@ async def authenticate_user(
         return None
 
     return user
-
-
-@router.post("/login")
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    session: AsyncSession = Depends(get_session),
-):
-    """Войти в систему и получить токен"""
-    user = await authenticate_user(session, form_data.username, form_data.password)
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверное имя пользователя или пароль",
-        )
-
-    access_token = create_access_token(data={"sub": user.username})
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "username": user.username,
-        "is_admin": user.is_admin,
-    }
 
 
 # ========== ТОЛЬКО ДЛЯ АДМИНИСТРАТОРОВ ==========

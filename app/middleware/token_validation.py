@@ -3,6 +3,7 @@ from fastapi.responses import RedirectResponse
 import jwt
 from app.config import settings
 from starlette.middleware.base import BaseHTTPMiddleware
+from loguru import logger
 
 
 class TokenValidationMiddleware(BaseHTTPMiddleware):
@@ -26,29 +27,55 @@ class TokenValidationMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         if self.is_excluded_path(request.url.path):
+            logger.error(f"Middleware в if self.is_excluded_path")
             return await call_next(request)
 
         access_token = request.cookies.get("access_token")
-
+        logger.info(f"токен: {access_token}")
         if not access_token:
             # Вместо исключения сразу делаем редирект
             response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
             response.delete_cookie(key="access_token")
+            logger.error(
+                """
+                         Middleware in if not access_token
+                         """
+            )
             return response
 
         try:
             jwt.decode(access_token, settings.SECRET_KEY, algorithms=["HS256"])
             # Токен валиден
+            logger.error(
+                """
+                         Middleware in try
+                         """
+            )
             return await call_next(request)
 
-        except jwt.ExpiredSignatureError:
+        except jwt.ExpiredSignatureError as e:
             # Токен истек - редирект на логин
             response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
             response.delete_cookie(key="access_token")
+            logger.error(
+                f"""
+                         Middleware in jwt.ExpiredSignatureError {e}
+                         """
+            )
             return response
 
-        except jwt.PyJWTError:
+        except jwt.PyJWTError as e:
             # Любая другая ошибка токена
             response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
             response.delete_cookie(key="access_token")
+            logger.error(
+                """
+                         Middleware in jwt.PyJWTError {e}
+                         """
+            )
             return response
+        logger.error(
+            f"""
+                     Middleware, ни чего не делал.
+                     """
+        )

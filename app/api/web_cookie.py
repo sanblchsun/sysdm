@@ -9,17 +9,12 @@ from app.database import get_session
 from app.models.users import User
 from app.core.auth import create_access_token, get_current_user
 from app.api.auth import authenticate_user
+from loguru import logger
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 router = APIRouter()
-
-
-@router.get("/", response_class=HTMLResponse)
-async def root():
-    """Корневой путь - перенаправление на логин"""
-    return RedirectResponse(url="/login", status_code=302)
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -47,6 +42,7 @@ async def login_submit(
         )
 
     # Создаем JWT токен
+    logger.error("Токен делался в app/api/web_cookie.py ")
     token = create_access_token(data={"sub": user.username})
 
     # Перенаправляем на страницу агентов с установкой cookie
@@ -69,11 +65,27 @@ async def agents_page(
 ):
     """Страница агентов с серверным рендерингом"""
 
-    # Получаем список агентов (используем ваш существующий эндпоинт)
-    # Импортируем здесь, чтобы избежать циклических импортов
-    from app.api.agents import get_agents
-
-    agents_data = await get_agents(current_user)
+    # Получаем список агентов - пока фэйковые
+    agents_data = [
+        {
+            "id": 1,
+            "name": "Агент 001",
+            "status": "Активен",
+            "last_seen": "2024-01-15 14:30:00",
+        },
+        {
+            "id": 2,
+            "name": "Агент 002",
+            "status": "Неактивен",
+            "last_seen": "2024-01-14 10:15:00",
+        },
+        {
+            "id": 3,
+            "name": "Агент 003",
+            "status": "Активен",
+            "last_seen": "2024-01-15 09:45:00",
+        },
+    ]
 
     return templates.TemplateResponse(
         "agents_nojs.html",
@@ -82,8 +94,36 @@ async def agents_page(
 
 
 @router.get("/logout")
-async def logout():
-    """Выход - удаляем cookie и перенаправляем на логин"""
+async def logout(request: Request, session: AsyncSession = Depends(get_session)):
+    """Выход - удаляем cookie и деактивируем сессию"""
+    access_token = request.cookies.get("access_token")
+
+    if access_token:
+        try:
+            import jwt
+            from app.config import settings
+
+            payload = jwt.decode(
+                access_token,
+                settings.SECRET_KEY,
+                algorithms=["HS256"],
+                options={"verify_exp": False},
+            )
+            username = payload.get("sub")
+
+            if username:
+                # Устанавливаем is_active=False при выходе
+                from sqlalchemy import update
+
+                await session.execute(
+                    update(User)
+                    .where(User.username == username)
+                    .values(is_active=False)
+                )
+                await session.commit()
+        except:
+            pass  # Игнорируем ошибки декодирования
+
     response = RedirectResponse(url="/login", status_code=302)
     response.delete_cookie(key="access_token")
     return response

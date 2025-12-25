@@ -21,7 +21,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
 
 
 async def get_current_user(
-    request: Request = None, # type: ignore
+    request: Request = None,  # type: ignore
     token: Optional[str] = Depends(oauth2_scheme),
     session: AsyncSession = Depends(get_session),
 ) -> User:
