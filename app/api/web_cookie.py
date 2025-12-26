@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -7,9 +7,10 @@ from pathlib import Path
 from app.config import settings
 from app.database import get_session
 from app.models.users import User
-from app.core.auth import create_access_token, get_current_user
+from app.core.auth import create_access_token, get_current_active_user
 from app.api.auth import authenticate_user
 from loguru import logger
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -17,21 +18,31 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 router = APIRouter()
 
 
-@router.get("/login", response_class=HTMLResponse)
+@router.get("/login")
 async def login_page(request: Request):
     """Страница входа"""
+    logger.debug(
+        """
+                 @router.get("/login",
+                 """
+    )
     return templates.TemplateResponse(
         "login_nojs.html", {"request": request, "error": None}
     )
 
 
-@router.post("/login", response_class=HTMLResponse)
+@router.post("/login")
 async def login_submit(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
     session: AsyncSession = Depends(get_session),
 ):
+    logger.debug(
+        """
+                 @router.post("/login",
+                 """
+    )
     """Обработка формы входа"""
     user = await authenticate_user(session, username, password)
 
@@ -39,10 +50,15 @@ async def login_submit(
         return templates.TemplateResponse(
             "login_nojs.html",
             {"request": request, "error": "❌ Неверный логин или пароль"},
+            status_code=401,
         )
 
     # Создаем JWT токен
-    logger.error("Токен делался в app/api/web_cookie.py ")
+    logger.debug(
+        """ 
+                 Токен делался в app/api/web_cookie.py 
+                 """
+    )
     token = create_access_token(sub=str(user.username))
 
     # Перенаправляем на страницу агентов с установкой cookie
@@ -51,16 +67,15 @@ async def login_submit(
         key="access_token",
         value=token,
         httponly=True,
-        samesite="lax",
     )
     return response
 
 
-@router.get("/agents", response_class=HTMLResponse)
+@router.get("/agents")
 async def agents_page(
     request: Request,
     session: AsyncSession = Depends(get_session),
-    current_user: User = Depends(get_current_user),  # Проверяем через cookie
+    current_user: User = Depends(get_current_active_user),  # Проверяем через cookie
 ):
     """Страница агентов с серверным рендерингом"""
 
@@ -92,37 +107,37 @@ async def agents_page(
     )
 
 
-@router.get("/logout")
-async def logout(request: Request, session: AsyncSession = Depends(get_session)):
-    """Выход - удаляем cookie и деактивируем сессию"""
-    access_token = request.cookies.get("access_token")
+# @router.get("/logout")
+# async def logout(request: Request, session: AsyncSession = Depends(get_session)):
+#     """Выход - удаляем cookie и деактивируем сессию"""
+#     access_token = request.cookies.get("access_token")
 
-    if access_token:
-        try:
-            import jwt
-            from app.config import settings
+#     if access_token:
+#         try:
+#             import jwt
+#             from app.config import settings
 
-            payload = jwt.decode(
-                access_token,
-                settings.SECRET_KEY,
-                algorithms=["HS256"],
-                options={"verify_exp": False},
-            )
-            username = payload.get("sub")
+#             payload = jwt.decode(
+#                 access_token,
+#                 settings.SECRET_KEY,
+#                 algorithms=["HS256"],
+#                 options={"verify_exp": False},
+#             )
+#             username = payload.get("sub")
 
-            if username:
-                # Устанавливаем is_active=False при выходе
-                from sqlalchemy import update
+#             if username:
+#                 # Устанавливаем is_active=False при выходе
+#                 from sqlalchemy import update
 
-                await session.execute(
-                    update(User)
-                    .where(User.username == username)
-                    .values(is_active=False)
-                )
-                await session.commit()
-        except:
-            pass  # Игнорируем ошибки декодирования
+#                 await session.execute(
+#                     update(User)
+#                     .where(User.username == username)
+#                     .values(is_active=False)
+#                 )
+#                 await session.commit()
+#         except:
+#             pass  # Игнорируем ошибки декодирования
 
-    response = RedirectResponse(url="/login", status_code=302)
-    response.delete_cookie(key="access_token")
-    return response
+#     response = RedirectResponse(url="/login", status_code=302)
+#     response.delete_cookie(key="access_token")
+#     return response

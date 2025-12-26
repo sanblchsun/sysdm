@@ -11,11 +11,13 @@ from app.database import get_session
 from app.models.users import User
 from app.config import settings
 
+
 # Конфигурация AuthX
 config = AuthXConfig()
 config.JWT_SECRET_KEY = settings.SECRET_KEY
 config.JWT_ALGORITHM = "HS256"
 config.JWT_TOKEN_LOCATION = ["cookies"]
+config.JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=1)
 
 
 security = AuthX(config=config)
@@ -68,15 +70,15 @@ async def get_current_active_user(
     return current_user
 
 
-async def get_current_admin_user(
-    current_user: User = Depends(get_current_active_user),
-) -> User:
-    """Получить администратора"""
-    if not bool(current_user.is_admin):
-        raise HTTPException(
-            status_code=403, detail="Недостаточно прав. Требуются права администратора"
-        )
-    return current_user
+# async def get_current_admin_user(
+#     current_user: User = Depends(get_current_active_user),
+# ) -> User:
+#     """Получить администратора"""
+#     if not bool(current_user.is_admin):
+#         raise HTTPException(
+#             status_code=403, detail="Недостаточно прав. Требуются права администратора"
+#         )
+#     return current_user
 
 
 def create_access_token(sub: str):

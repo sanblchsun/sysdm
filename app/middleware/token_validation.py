@@ -27,16 +27,16 @@ class TokenValidationMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         if self.is_excluded_path(request.url.path):
-            logger.error(f"Middleware в if self.is_excluded_path")
+            logger.debug("""Middleware в if self.is_excluded_path""")
             return await call_next(request)
 
         access_token = request.cookies.get("access_token")
-        logger.info(f"токен: {access_token}")
+        logger.debug(f"токен: {access_token}")
         if not access_token:
             # Вместо исключения сразу делаем редирект
             response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
             response.delete_cookie(key="access_token")
-            logger.error(
+            logger.debug(
                 """
                          Middleware in if not access_token
                          """
@@ -46,7 +46,7 @@ class TokenValidationMiddleware(BaseHTTPMiddleware):
         try:
             jwt.decode(access_token, settings.SECRET_KEY, algorithms=["HS256"])
             # Токен валиден
-            logger.error(
+            logger.debug(
                 """
                          Middleware in try
                          """
@@ -57,7 +57,7 @@ class TokenValidationMiddleware(BaseHTTPMiddleware):
             # Токен истек - редирект на логин
             response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
             response.delete_cookie(key="access_token")
-            logger.error(
+            logger.debug(
                 f"""
                          Middleware in jwt.ExpiredSignatureError {e}
                          """
@@ -68,13 +68,13 @@ class TokenValidationMiddleware(BaseHTTPMiddleware):
             # Любая другая ошибка токена
             response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
             response.delete_cookie(key="access_token")
-            logger.error(
+            logger.debug(
                 """
                          Middleware in jwt.PyJWTError {e}
                          """
             )
             return response
-        logger.error(
+        logger.debug(
             f"""
                      Middleware, ни чего не делал.
                      """
