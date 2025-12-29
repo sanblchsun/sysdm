@@ -1,0 +1,40 @@
+import asyncio
+from sqlalchemy import select
+
+from app.database import new_session
+from app.models.users import User
+
+
+async def create_user(
+    username: str,
+    password: str,
+    is_active: bool = True,
+):
+    async with new_session() as session:
+        result = await session.execute(select(User).where(User.username == username))
+        existing_user = result.scalar_one_or_none()
+
+        if existing_user:
+            print(f"❌ Пользователь '{username}' уже существует")
+            return
+
+        user = User(
+            username=username,
+            is_active=is_active,
+        )
+        user.set_password(password)
+
+        session.add(user)
+        await session.commit()
+
+        print(f"✅ Пользователь '{username}' успешно создан")
+
+
+if __name__ == "__main__":
+    asyncio.run(
+        create_user(
+            username="admin",
+            password="admin123",
+            is_active=True,
+        )
+    )

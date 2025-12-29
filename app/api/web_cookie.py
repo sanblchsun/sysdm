@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Form, Depends, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -7,9 +7,10 @@ from pathlib import Path
 from app.config import settings
 from app.database import get_session
 from app.models.users import User
-from app.core.auth import create_access_token, get_current_active_user
+from app.core.authx import auth
 from app.api.auth import authenticate_user
 from loguru import logger
+from sqlalchemy.orm import Session
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,113 +32,55 @@ async def login_page(request: Request):
     )
 
 
-@router.post("/login")
-async def login_submit(
+# -------------------- LOGIN --------------------
+@router.post("/login", response_class=HTMLResponse)
+async def login(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
-    session: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session),
 ):
-    logger.debug(
-        """
-                 @router.post("/login",
-                 """
-    )
-    """Обработка формы входа"""
-    user = await authenticate_user(session, username, password)
+    result = await db.execute(select(User).where(User.username == username))
+    user: User | None = result.scalar_one_or_none()
 
-    if not user:
+    if user is None or not user.verify_password(password):
         return templates.TemplateResponse(
             "login_nojs.html",
-            {"request": request, "error": "❌ Неверный логин или пароль"},
+            {"request": request, "error": "Неверный логин или пароль"},
             status_code=401,
         )
 
-    # Создаем JWT токен
-    logger.debug(
-        """ 
-                 Токен делался в app/api/web_cookie.py 
-                 """
-    )
-    token = create_access_token(sub=str(user.username))
+    if not user.is_active:
+        return templates.TemplateResponse(
+            "login_nojs.html",
+            {"request": request, "error": "Пользователь отключён"},
+            status_code=403,
+        )
 
-    # Перенаправляем на страницу агентов с установкой cookie
+    # Создаём JWT access token
+    access_token = auth.create_access_token(uid=str(user.id))
+
+    # Ответ с редиректом на /agents
     response = RedirectResponse(url="/agents", status_code=302)
-    response.set_cookie(
-        key="access_token",
-        value=token,
-        httponly=True,
-    )
+    auth.set_access_cookies(access_token, response)
     return response
 
 
-@router.get("/agents")
+# -------------------- AGENTS (защищённый) --------------------
+@router.get("/agents", response_class=HTMLResponse)
 async def agents_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
-    current_user: User = Depends(get_current_active_user),  # Проверяем через cookie
+    uid: str = Depends(auth.get_current_subject),  # uid из JWT
+    db: AsyncSession = Depends(get_session),
 ):
-    """Страница агентов с серверным рендерингом"""
+    result = await db.execute(select(User).where(User.id == uid))
+    user: User | None = result.scalar_one_or_none()
 
-    # Получаем список агентов - пока фэйковые
-    agents_data = [
-        {
-            "id": 1,
-            "name": "Агент 001",
-            "status": "Активен",
-            "last_seen": "2024-01-15 14:30:00",
-        },
-        {
-            "id": 2,
-            "name": "Агент 002",
-            "status": "Неактивен",
-            "last_seen": "2024-01-14 10:15:00",
-        },
-        {
-            "id": 3,
-            "name": "Агент 003",
-            "status": "Активен",
-            "last_seen": "2024-01-15 09:45:00",
-        },
-    ]
+    if user is None or not user.is_active:
+        return templates.TemplateResponse(
+            "login_nojs.html", {"request": request}, status_code=403
+        )
 
     return templates.TemplateResponse(
-        "agents_nojs.html",
-        {"request": request, "user": current_user, "agents": agents_data},
+        "agents_nojs.html", {"request": request, "user": user}
     )
-
-
-# @router.get("/logout")
-# async def logout(request: Request, session: AsyncSession = Depends(get_session)):
-#     """Выход - удаляем cookie и деактивируем сессию"""
-#     access_token = request.cookies.get("access_token")
-
-#     if access_token:
-#         try:
-#             import jwt
-#             from app.config import settings
-
-#             payload = jwt.decode(
-#                 access_token,
-#                 settings.SECRET_KEY,
-#                 algorithms=["HS256"],
-#                 options={"verify_exp": False},
-#             )
-#             username = payload.get("sub")
-
-#             if username:
-#                 # Устанавливаем is_active=False при выходе
-#                 from sqlalchemy import update
-
-#                 await session.execute(
-#                     update(User)
-#                     .where(User.username == username)
-#                     .values(is_active=False)
-#                 )
-#                 await session.commit()
-#         except:
-#             pass  # Игнорируем ошибки декодирования
-
-#     response = RedirectResponse(url="/login", status_code=302)
-#     response.delete_cookie(key="access_token")
-#     return response

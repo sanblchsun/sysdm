@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from app.middleware.token_validation import TokenValidationMiddleware
-from app.api import ping, auth, web_cookie
+from app.api import auth, web_cookie
 import os
 
 app = FastAPI(title="SystemDM API")
@@ -29,7 +29,6 @@ app.mount("/static", StaticFiles(directory=static_path), name="static")
 # Регистрируем роутеры
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(web_cookie.router, tags=["web"])
-app.include_router(ping.router, tags=["ping"])
 
 
 # Корневой путь перенаправляет на логин
@@ -38,5 +37,6 @@ async def root():
     logger.debug(
         """ 
                  @app.get("/")
-                 """)
+                 """
+    )
     return RedirectResponse(url="/login")
