@@ -58,7 +58,12 @@ async def login(
         )
 
     # Создаём JWT access token
-    access_token = auth.create_access_token(uid=str(user.id))
+    uid = str(user.id)
+    logger.debug(
+        f"""
+                 Пользователь получил uid: {uid}"""
+    )
+    access_token = auth.create_access_token(uid=uid)
 
     # Ответ с редиректом на /agents
     response = RedirectResponse(url="/agents", status_code=302)
