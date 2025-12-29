@@ -3,6 +3,7 @@ from sqlalchemy import select
 
 from app.database import new_session
 from app.models.users import User
+from app.config import settings
 
 
 async def create_user(
@@ -33,8 +34,8 @@ async def create_user(
 if __name__ == "__main__":
     asyncio.run(
         create_user(
-            username="admin",
-            password="admin123",
+            username=settings.FIRST_SUPERUSER,
+            password=settings.FIRST_SUPERUSER_PASSWORD,
             is_active=True,
         )
     )

@@ -1,7 +1,7 @@
 from datetime import timedelta
 from authx import AuthX, AuthXConfig
+from pydantic import BaseModel
 from app.config import settings
-
 
 
 # Конфигурация AuthX
@@ -16,11 +16,11 @@ config.JWT_COOKIE_HTTP_ONLY = True
 config.JWT_COOKIE_SAMESITE = "lax"
 config.JWT_CSRF_IN_COOKIES = True
 config.JWT_ACCESS_COOKIE_NAME = "access_token_cookie"
-from fastapi.security import OAuth2PasswordBearer
-from app.database import get_session
-from sqlalchemy.future import select
 
-auth = AuthX(config=config)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
+class User(BaseModel):
+    username: str
+    password: str
 
+
+auth = AuthX(config=config, model=User)

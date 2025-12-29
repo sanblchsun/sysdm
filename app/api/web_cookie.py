@@ -8,9 +8,9 @@ from app.config import settings
 from app.database import get_session
 from app.models.users import User
 from app.core.authx import auth
-from app.api.auth import authenticate_user
+
+# from app.api.auth import authenticate_user
 from loguru import logger
-from sqlalchemy.orm import Session
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
