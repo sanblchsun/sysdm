@@ -1,12 +1,10 @@
-from fastapi import FastAPI
+from app.loader import app
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from app.api import web_cookie
 import os
 
-app = FastAPI(title="SystemDM API")
 
 # Подключаем статические файлы
 current_dir = os.path.dirname(os.path.abspath(__file__))
