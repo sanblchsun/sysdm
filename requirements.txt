@@ -12,6 +12,7 @@ pydantic-settings==2.12.0
 
 # Аутентификация
 authx==1.4.3
+authx_extra
 bcrypt==4.0.1
 passlib==1.7.4
 python-jose[cryptography]==3.3.0

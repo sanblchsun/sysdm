@@ -20,7 +20,8 @@ from app.loader import app
 config = AuthXConfig(
     JWT_ALGORITHM="HS256",
     JWT_SECRET_KEY="AXIOASUDOIDODFJASODCJASOFJSDFOSDMFOSDIJFCSODICJSDOCJSDOCJSDOCIJOFJ",
-    JWT_TOKEN_LOCATION=["headers"],
+    JWT_TOKEN_LOCATION=["cookies"],  # Изменено на cookies
+    JWT_ACCESS_COOKIE_NAME="access_token",
 )
 
 
