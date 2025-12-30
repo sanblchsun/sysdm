@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Form, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-
+from loguru import logger
 from authx import AuthX, AuthXConfig
 
 # Create a FastAPI app
@@ -74,7 +75,7 @@ async def login_page(request: Request):
 
 @app.post("/login")
 def login(
-    response: Response,
+    request: Request,
     username: str = Form(...),
     password: str = Form(...),
 ):
@@ -88,16 +89,13 @@ def login(
 
             # Set tokens in cookies if cookies are enabled
             if "cookies" in auth_config.JWT_TOKEN_LOCATION:
+                response = RedirectResponse(url="/protected", status_code=302)
                 auth.set_access_cookies(access_token, response)
                 auth.set_refresh_cookies(refresh_token, response)
+                logger.debug(f"""set_access_cookies Есть""")
 
             # Return tokens in response body
-            return {
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "token_type": "bearer",
-                "message": "Tokens are set in cookies and returned in the response body",
-            }
+            return response
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
 
