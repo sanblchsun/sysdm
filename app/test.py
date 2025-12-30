@@ -66,6 +66,13 @@ templates = Jinja2Templates(directory="app/templates")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
+@app.post("/logout")
+def logout(response: Response):
+    """Logout endpoint that clears the cookies."""
+    auth.unset_cookies(response)
+    return {"message": "Successfully logged out"}
+
+
 @app.get("/login")
 async def login_page(request: Request):
     return templates.TemplateResponse(
@@ -103,13 +110,6 @@ def login(
     raise HTTPException(status_code=401, detail="Invalid username or password")
 
 
-@app.post("/logout")
-def logout(response: Response):
-    """Logout endpoint that clears the cookies."""
-    auth.unset_cookies(response)
-    return {"message": "Successfully logged out"}
-
-
 @app.get("/protected")
 async def protected_route(request: Request):
     """Protected route that requires a valid access token from any location."""
@@ -117,6 +117,7 @@ async def protected_route(request: Request):
         # get and verify the token from the request
         token = await auth.get_access_token_from_request(request)
         payload = auth.verify_token(token, verify_csrf=False)
+        logger.debug("тут буду работать над agents")
 
         return {
             "message": "Access granted",
