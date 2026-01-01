@@ -75,6 +75,6 @@ async def protected_route(request: Request):
         return RedirectResponse(url="/login", status_code=401)
 
     return templates.TemplateResponse(
-        "agents_nojs.html",
+        "agents.html",
         {"request": request, "user": payload.sub, "agents": "agents_data"},
     )
