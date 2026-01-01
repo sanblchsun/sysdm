@@ -36628,3 +36628,33 @@ a {
 .sf-hidden {
   display: none !important;
 }
+
+.agents-layout {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.agents-left {
+  width: 260px;
+  min-width: 180px;
+  max-width: 500px;
+  overflow: auto;
+}
+
+.agents-right {
+  flex: 1;
+  overflow: auto;
+}
+
+.agents-separator {
+  width: 6px;
+  cursor: col-resize;
+  background-color: var(--separator);
+}
+
+.agents-separator:hover,
+.agents-separator:focus {
+  background-color: var(--separator-hover);
+  outline: none;
+}
