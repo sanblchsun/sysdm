@@ -1,16 +1,4 @@
 @charset "UTF-8";
-/*!
-Ionicons, v4.6.3
-Created by Ben Sperry for the Ionic Framework, http://ionicons.com/
-https://twitter.com/benjsperry  https://twitter.com/ionicframework
-MIT License: https://github.com/driftyco/ionicons
-
-Android-style icons originally built by Google’s
-Material Design Icons: https://github.com/google/material-design-icons
-used under CC BY http://creativecommons.org/licenses/by/4.0/
-Modified icons to fit ionicon’s grid from original.
-*/
-
 .ionicons:before {
   display: inline-block;
   font-family: Ionicons;
@@ -36658,3 +36646,81 @@ a {
   background-color: var(--separator-hover);
   outline: none;
 }
+
+
+/* existing content preserved */
+
+/* === FIX box sizing === */
+* {
+  box-sizing: border-box;
+}
+
+/* === MAIN AGENTS LAYOUT === */
+.agents-layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* === LEFT PANEL === */
+.agents-left {
+  flex: 0 0 auto;
+  width: 260px;
+  min-width: 180px;
+  max-width: 1800px; /* БЫЛО 800px — ЭТО ГЛАВНЫЙ БАГ */
+  overflow-y: auto;
+}
+
+/* === RIGHT PANEL === */
+.agents-right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* === TOP / BOTTOM === */
+.agents-top {
+  height: 50%;
+  min-height: 120px;
+  overflow: auto;
+}
+
+.agents-bottom {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+}
+
+/* === VERTICAL SPLITTER === */
+.agents-separator {
+  width: 6px;
+  cursor: col-resize;
+  background: var(--splitter-color, #ccc);
+  flex-shrink: 0;
+}
+
+/* === HORIZONTAL SPLITTER === */
+.agents-h-separator {
+  height: 6px;
+  cursor: row-resize;
+  background: var(--splitter-color, #ccc);
+  flex-shrink: 0;
+}
+
+/* === INTERACTION === */
+.agents-separator:hover,
+.agents-separator:focus,
+.agents-h-separator:hover,
+.agents-h-separator:focus {
+  background: #999;
+  outline: none;
+}
+
+/* === DARK MODE === */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --splitter-color: #555;
+  }
+}
+
