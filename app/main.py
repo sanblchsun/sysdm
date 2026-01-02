@@ -6,6 +6,7 @@ import os
 from app.core.authx import auth
 from fastapi import FastAPI
 from app.api.v1 import api_router
+from app.api.v1 import tree, agents
 
 
 app = FastAPI(title="SysDM RMM")
@@ -20,6 +21,8 @@ auth.handle_errors(app)
 # Регистрируем роутеры
 app.include_router(web_cookie.router, tags=["web"])
 app.include_router(api_router, prefix="/api/v1")
+app.include_router(tree.router, prefix="/api/v1")
+app.include_router(agents.router, prefix="/api/v1")
 
 
 # Корневой путь перенаправляет на логин
