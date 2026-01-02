@@ -8,35 +8,134 @@
       rel="stylesheet"
       href="{{ url_for('static', path='/css/style.css') }}"
     />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
   </head>
   <body>
     <div class="container">
+      <!-- Левая панель -->
       <div class="left-panel" id="leftPanel">
         <div class="panel-content">
           <h2>Левая панель</h2>
           <p>Содержимое левой части сайта.</p>
-          <p>Можно добавлять любой контент: текст, изображения, формы и т.д.</p>
+
+          <!-- Панель с 2 кнопками -->
+          <div class="button-panel">
+            <button class="btn btn-primary">
+              <i class="fas fa-home"></i> <span>Главная</span>
+            </button>
+            <button class="btn btn-secondary">
+              <i class="fas fa-cog"></i> <span>Настройки</span>
+            </button>
+          </div>
+
+          <div class="panel-info">
+            <p>
+              Можно добавлять любой контент: текст, изображения, формы и т.д.
+            </p>
+            <p>Кнопки выполняют различные действия в системе.</p>
+          </div>
         </div>
       </div>
 
       <div class="vertical-divider" id="verticalDivider"></div>
 
+      <!-- Правая часть -->
       <div class="right-container">
+        <!-- Верхняя правая панель -->
         <div class="top-panel" id="topPanel">
           <div class="panel-content">
             <h2>Верхняя правая панель</h2>
-            <p>Содержимое верхней правой части.</p>
-            <p>Это панель разделена горизонтальным разделителем.</p>
+
+            <!-- Панель управления верхней панели -->
+            <div class="top-controls">
+              <!-- Панель с 3 кнопками (слева) -->
+              <div class="left-buttons">
+                <button class="btn btn-action">
+                  <i class="fas fa-plus"></i> <span>Добавить</span>
+                </button>
+                <button class="btn btn-action">
+                  <i class="fas fa-edit"></i> <span>Редактировать</span>
+                </button>
+                <button class="btn btn-action">
+                  <i class="fas fa-trash"></i> <span>Удалить</span>
+                </button>
+              </div>
+
+              <!-- Поиск и фильтр (справа) -->
+              <div class="right-search">
+                <div class="search-box">
+                  <input
+                    type="text"
+                    placeholder="Поиск..."
+                    class="search-input"
+                  />
+                  <button class="search-btn">
+                    <i class="fas fa-search"></i>
+                  </button>
+                </div>
+                <button class="btn btn-filter">
+                  <i class="fas fa-filter"></i> <span>Фильтр</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="panel-info">
+              <p>Содержимое верхней правой части.</p>
+              <p>Эта панель разделена горизонтальным разделителем.</p>
+              <p>Здесь может быть таблица, список или другой контент.</p>
+            </div>
           </div>
         </div>
 
         <div class="horizontal-divider" id="horizontalDivider"></div>
 
+        <!-- Нижняя правая панель -->
         <div class="bottom-panel" id="bottomPanel">
           <div class="panel-content">
             <h2>Нижняя правая панель</h2>
-            <p>Содержимое нижней правой части.</p>
-            <p>Все разделители можно перемещать мышкой!</p>
+
+            <!-- Панель с 10 кнопками -->
+            <div class="bottom-buttons">
+              <button class="btn btn-tab">
+                <i class="fas fa-user"></i> <span>Профиль</span>
+              </button>
+              <button class="btn btn-tab">
+                <i class="fas fa-chart-bar"></i> <span>Статистика</span>
+              </button>
+              <button class="btn btn-tab">
+                <i class="fas fa-file-alt"></i> <span>Документы</span>
+              </button>
+              <button class="btn btn-tab">
+                <i class="fas fa-envelope"></i> <span>Сообщения</span>
+              </button>
+              <button class="btn btn-tab">
+                <i class="fas fa-calendar"></i> <span>Календарь</span>
+              </button>
+              <button class="btn btn-tab">
+                <i class="fas fa-tasks"></i> <span>Задачи</span>
+              </button>
+              <button class="btn btn-tab">
+                <i class="fas fa-users"></i> <span>Команда</span>
+              </button>
+              <button class="btn btn-tab">
+                <i class="fas fa-database"></i> <span>База данных</span>
+              </button>
+              <button class="btn btn-tab">
+                <i class="fas fa-chart-pie"></i> <span>Отчеты</span>
+              </button>
+              <button class="btn btn-tab">
+                <i class="fas fa-question-circle"></i> <span>Помощь</span>
+              </button>
+            </div>
+
+            <div class="panel-info">
+              <p>Содержимое нижней правой части.</p>
+              <p>Все разделители можно перемещать мышкой!</p>
+              <p>Кнопки обеспечивают быстрый доступ к разделам системы.</p>
+            </div>
           </div>
         </div>
       </div>

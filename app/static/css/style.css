@@ -88,20 +88,209 @@ body {
   padding: 20px;
   height: 100%;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .panel-content h2 {
   color: #333;
-  margin-bottom: 15px;
+  margin-bottom: 20px;
   font-size: 1.5em;
   border-bottom: 2px solid #667eea;
   padding-bottom: 10px;
 }
 
-.panel-content p {
+.panel-info {
+  margin-top: 20px;
   color: #666;
   line-height: 1.6;
+}
+
+.panel-info p {
   margin-bottom: 10px;
+}
+
+/* Стили для кнопок */
+.btn {
+  padding: 10px 15px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.btn i {
+  font-size: 14px;
+}
+
+/* Кнопки для левой панели - ГОРИЗОНТАЛЬНО */
+.button-panel {
+  display: flex;
+  gap: 10px;
+  margin: 20px 0;
+  flex-wrap: wrap;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  flex: 1;
+  min-width: 120px;
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+}
+
+.btn-secondary {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  flex: 1;
+  min-width: 120px;
+}
+
+.btn-secondary:hover {
+  background: #e2e8f0;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(203, 213, 225, 0.3);
+}
+
+/* Панель управления верхней панели */
+.top-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 15px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+/* 3 кнопки слева - ГОРИЗОНТАЛЬНО */
+.left-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-action {
+  background: #3b82f6;
+  color: white;
+  padding: 8px 12px;
+  font-size: 13px;
+  min-width: 100px;
+}
+
+.btn-action:hover {
+  background: #2563eb;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3);
+}
+
+/* Поиск и фильтр справа */
+.right-search {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  background: white;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  overflow: hidden;
+  min-width: 200px;
+}
+
+.search-input {
+  padding: 8px 12px;
+  border: none;
+  outline: none;
+  width: 100%;
+  font-size: 14px;
+  min-width: 150px;
+}
+
+.search-btn {
+  background: #f1f5f9;
+  border: none;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: #475569;
+  transition: background 0.3s;
+}
+
+.search-btn:hover {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.btn-filter {
+  background: #10b981;
+  color: white;
+  padding: 8px 12px;
+  font-size: 13px;
+  min-width: 80px;
+}
+
+.btn-filter:hover {
+  background: #059669;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px rgba(16, 185, 129, 0.3);
+}
+
+/* 10 кнопок в нижней панели - ГОРИЗОНТАЛЬНО и в 6 раз меньше */
+.bottom-buttons {
+  display: flex;
+  gap: 8px;
+  margin: 20px 0;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  overflow-x: auto;
+  padding-bottom: 5px;
+}
+
+.btn-tab {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  padding: 6px 8px;
+  font-size: 11px;
+  text-align: center;
+  flex-direction: column;
+  height: 50px;
+  min-width: 60px;
+  flex-shrink: 0;
+}
+
+/* Уменьшаем в 6 раз от исходных размеров */
+.btn-tab i {
+  font-size: 12px; /* Было 18px, уменьшили в 1.5 раза */
+  margin-bottom: 3px;
+}
+
+.btn-tab span {
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.btn-tab:hover {
+  background: #e2e8f0;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(203, 213, 225, 0.3);
+  color: #334155;
 }
 
 /* Адаптивность для мобильных устройств */
@@ -127,29 +316,78 @@ body {
   .right-container {
     width: 100%;
   }
+
+  .top-controls {
+    flex-direction: column;
+    gap: 15px;
+    align-items: stretch;
+  }
+
+  .left-buttons,
+  .right-search {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .search-input {
+    min-width: 100px;
+  }
+
+  .bottom-buttons {
+    gap: 5px;
+    justify-content: center;
+  }
+
+  .btn-tab {
+    min-width: 55px;
+    height: 45px;
+    padding: 5px 6px;
+  }
 }
 
+@media (max-width: 480px) {
+  .bottom-buttons {
+    gap: 4px;
+  }
 
-/* Добавьте это в конец файла style.css */
+  .btn-tab {
+    min-width: 50px;
+    height: 40px;
+    padding: 4px 5px;
+    font-size: 10px;
+  }
+
+  .btn-tab i {
+    font-size: 10px;
+  }
+
+  .btn-primary,
+  .btn-secondary {
+    min-width: 100px;
+  }
+}
 
 /* Улучшение для горизонтального разделителя */
 .horizontal-divider {
-  flex-shrink: 0; /* Важно: не позволяет сжиматься */
+  flex-shrink: 0;
 }
 
-/* Улучшение для панелей */
-.top-panel {
-  flex-shrink: 0; /* Чтобы высота не сжималась автоматически */
+/* Стили для скролла */
+.bottom-buttons::-webkit-scrollbar {
+  height: 6px;
 }
 
-.bottom-panel {
-  min-height: 0; /* Для правильной работы flex */
+.bottom-buttons::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
 }
 
-/* Улучшение при перетаскивании */
-body.resizing * {
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
+.bottom-buttons::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.bottom-buttons::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
 }
