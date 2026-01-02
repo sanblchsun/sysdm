@@ -11,3 +11,8 @@ class AgentCheckinOut(BaseModel):
     agent_id: int
     server_time: datetime
     tasks: list
+
+
+class AgentRegister(BaseModel):
+    hostname: str
+    department_id: int
