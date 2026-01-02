@@ -436,3 +436,36 @@ body {
     min-width: 100px;
   }
 }
+
+.tree-root,
+.tree-root ul {
+  list-style: none;
+  padding-left: 15px;
+}
+
+.tree-company {
+  font-weight: bold;
+  margin-top: 6px;
+}
+
+.tree-department {
+  font-style: italic;
+  margin-top: 4px;
+}
+
+.tree-agent {
+  cursor: pointer;
+  padding-left: 5px;
+}
+
+.tree-agent.online {
+  color: #2ecc71;
+}
+
+.tree-agent.offline {
+  color: #e74c3c;
+}
+
+.tree-agent:hover {
+  text-decoration: underline;
+}

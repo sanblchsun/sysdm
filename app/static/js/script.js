@@ -242,3 +242,80 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => resizable.restoreSizes(), 50);
   });
 });
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadTree();
+});
+
+async function loadTree() {
+  const treeContainer = document.getElementById("agents-tree");
+  if (!treeContainer) {
+    console.error("agents-tree not found");
+    return;
+  }
+
+  treeContainer.innerHTML = "Loading...";
+
+  try {
+    const resp = await fetch("/api/v1/tree");
+    const data = await resp.json();
+
+    treeContainer.innerHTML = "";
+    treeContainer.appendChild(buildTree(data));
+  } catch (err) {
+    console.error(err);
+    treeContainer.innerHTML = "Failed to load agents";
+  }
+}
+
+function buildTree(companies) {
+  const ul = document.createElement("ul");
+  ul.classList.add("tree-root");
+
+  companies.forEach((company) => {
+    const companyLi = document.createElement("li");
+    companyLi.classList.add("tree-company");
+    companyLi.textContent = company.name;
+
+    const deptUl = document.createElement("ul");
+
+    company.departments.forEach((dept) => {
+      const deptLi = document.createElement("li");
+      deptLi.classList.add("tree-department");
+      deptLi.textContent = dept.name;
+
+      const agentUl = document.createElement("ul");
+
+      dept.agents.forEach((agent) => {
+        const agentLi = document.createElement("li");
+        agentLi.classList.add("tree-agent");
+        agentLi.textContent = agent.hostname;
+
+        agentLi.classList.add(agent.is_online ? "online" : "offline");
+
+        agentLi.onclick = () => selectAgent(agent);
+
+        agentUl.appendChild(agentLi);
+      });
+
+      deptLi.appendChild(agentUl);
+      deptUl.appendChild(deptLi);
+    });
+
+    companyLi.appendChild(deptUl);
+    ul.appendChild(companyLi);
+  });
+
+  return ul;
+}
+
+function selectAgent(agent) {
+  const details = document.getElementById("agent-details");
+  if (!details) return;
+
+  details.innerHTML = `
+        <h3>${agent.hostname}</h3>
+        <p>Status: <b>${agent.is_online ? "Online" : "Offline"}</b></p>
+        <p>ID: ${agent.id}</p>
+    `;
+}
