@@ -11,6 +11,10 @@ class ResizablePanels {
     this.isVerticalResizing = false;
     this.isHorizontalResizing = false;
 
+    // Получаем реальные размеры разделителей из CSS или вычисляем
+    this.verticalDividerThickness = 10; // Из CSS: width: 10px
+    this.horizontalDividerThickness = 10; // Из CSS: height: 10px
+
     this.init();
   }
 
@@ -21,47 +25,34 @@ class ResizablePanels {
   }
 
   setInitialSizes() {
-    // Устанавливаем начальные размеры только если они не сохранены
     if (!localStorage.getItem("leftPanelWidth")) {
       this.leftPanel.style.width = "30%";
+      this.leftPanel.style.flex = "0 0 30%";
     }
     if (!localStorage.getItem("topPanelHeight")) {
-      // Начальная высота 50%
       this.topPanel.style.height = "50%";
-      this.topPanel.style.flex = "none";
+      this.topPanel.style.flex = "0 0 50%";
     }
   }
 
   setupEventListeners() {
-    // Вертикальный разделитель
     this.verticalDivider.addEventListener(
       "mousedown",
       this.startVerticalResize.bind(this)
     );
-
-    // Горизонтальный разделитель - ФИКСИРУЕМ
     this.horizontalDivider.addEventListener(
       "mousedown",
       this.startHorizontalResize.bind(this)
     );
 
-    // Обработчики для мыши
     document.addEventListener("mousemove", this.handleMouseMove.bind(this));
     document.addEventListener("mouseup", this.stopResize.bind(this));
 
-    // Для мобильных устройств
-    this.verticalDivider.addEventListener("touchstart", (e) => {
-      this.startVerticalResize(e.touches[0]);
-      document.addEventListener("touchmove", this.handleTouchMove.bind(this));
-      document.addEventListener("touchend", this.stopResize.bind(this));
-      e.preventDefault();
-    });
-
-    this.horizontalDivider.addEventListener("touchstart", (e) => {
-      this.startHorizontalResize(e.touches[0]);
-      document.addEventListener("touchmove", this.handleTouchMove.bind(this));
-      document.addEventListener("touchend", this.stopResize.bind(this));
-      e.preventDefault();
+    // Предотвращаем выделение текста
+    document.addEventListener("selectstart", (e) => {
+      if (this.isVerticalResizing || this.isHorizontalResizing) {
+        e.preventDefault();
+      }
     });
   }
 
@@ -69,7 +60,23 @@ class ResizablePanels {
     this.isVerticalResizing = true;
     this.startX = e.clientX;
     this.startWidth = this.leftPanel.offsetWidth;
-    this.containerWidth = this.container.offsetWidth;
+
+    // Получаем реальные координаты
+    const containerRect = this.container.getBoundingClientRect();
+    const verticalDividerRect = this.verticalDivider.getBoundingClientRect();
+
+    // Минимальная и максимальная позиция разделителя
+    const minLeft = containerRect.left + 10; // 10px padding контейнера
+    const maxLeft =
+      containerRect.right - 10 - 50 - this.verticalDividerThickness; // padding + минимальная ширина правой части + толщина разделителя
+
+    // Начальная позиция разделителя (центр)
+    this.startDividerCenter =
+      verticalDividerRect.left + this.verticalDividerThickness / 2;
+
+    // Границы для центра разделителя
+    this.minDividerCenter = minLeft + this.verticalDividerThickness / 2;
+    this.maxDividerCenter = maxLeft + this.verticalDividerThickness / 2;
 
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
@@ -80,7 +87,24 @@ class ResizablePanels {
     this.isHorizontalResizing = true;
     this.startY = e.clientY;
     this.startHeight = this.topPanel.offsetHeight;
-    this.containerHeight = this.rightContainer.offsetHeight;
+
+    // Получаем реальные координаты
+    const rightContainerRect = this.rightContainer.getBoundingClientRect();
+    const horizontalDividerRect =
+      this.horizontalDivider.getBoundingClientRect();
+
+    // Минимальная и максимальная позиция разделителя
+    const minTop = rightContainerRect.top; // 10px padding контейнера
+    const maxTop =
+      rightContainerRect.bottom - 15 - this.horizontalDividerThickness; // padding + минимальная высота нижней панели + толщина разделителя
+
+    // Начальная позиция разделителя (центр)
+    this.startDividerCenter =
+      horizontalDividerRect.top + this.horizontalDividerThickness / 2;
+
+    // Границы для центра разделителя
+    this.minDividerCenter = minTop + this.horizontalDividerThickness / 2;
+    this.maxDividerCenter = maxTop + this.horizontalDividerThickness / 2;
 
     document.body.style.cursor = "row-resize";
     document.body.style.userSelect = "none";
@@ -96,56 +120,67 @@ class ResizablePanels {
     }
   }
 
-  handleTouchMove(e) {
-    if (this.isVerticalResizing && e.touches[0]) {
-      this.handleVerticalMove(e.touches[0].clientX);
-    }
-    if (this.isHorizontalResizing && e.touches[0]) {
-      this.handleHorizontalMove(e.touches[0].clientY);
-    }
-    e.preventDefault();
-  }
-
   handleVerticalMove(clientX) {
     const dx = clientX - this.startX;
-    const minWidth = 1;
-    const maxWidth = this.containerWidth - 50;
-    let newWidth = this.startWidth + dx;
+    let newDividerCenter = this.startDividerCenter + dx;
 
-    // Ограничиваем размеры
-    newWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
+    // Ограничиваем позицию центра разделителя
+    newDividerCenter = Math.max(
+      this.minDividerCenter,
+      Math.min(newDividerCenter, this.maxDividerCenter)
+    );
 
-    // Применяем новые размеры
-    this.leftPanel.style.width = `${newWidth}px`;
-    this.leftPanel.style.flex = "none";
+    // Вычисляем новую ширину левой панели
+    const containerRect = this.container.getBoundingClientRect();
+    const newWidth =
+      newDividerCenter - containerRect.left - this.verticalDividerThickness / 2;
 
-    // Сохраняем в localStorage
-    localStorage.setItem("leftPanelWidth", `${newWidth}px`);
+    // Устанавливаем новую ширину
+    const actualWidth = Math.max(2, newWidth);
+    this.leftPanel.style.width = `${actualWidth}px`;
+    this.leftPanel.style.flex = "0 0 auto";
+
+    // Сохраняем ширину
+    localStorage.setItem("leftPanelWidth", `${actualWidth}px`);
   }
 
   handleHorizontalMove(clientY) {
     const dy = clientY - this.startY;
-    const minHeight = 0;
-    const maxHeight = this.containerHeight - 30;
-    let newHeight = this.startHeight + dy;
+    let newDividerCenter = this.startDividerCenter + dy;
 
-    // Ограничиваем размеры
-    newHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
+    // Ограничиваем позицию центра разделителя
+    newDividerCenter = Math.max(
+      this.minDividerCenter,
+      Math.min(newDividerCenter, this.maxDividerCenter)
+    );
 
-    // Применяем новые размеры
-    this.topPanel.style.height = `${newHeight}px`;
-    this.topPanel.style.flex = "none";
+    // Вычисляем новую высоту верхней панели
+    const rightContainerRect = this.rightContainer.getBoundingClientRect();
+    const newHeight =
+      newDividerCenter -
+      rightContainerRect.top -
+      this.horizontalDividerThickness / 2;
+
+    // Устанавливаем новую высоту
+    const actualHeight = Math.max(5, newHeight);
+    this.topPanel.style.height = `${actualHeight}px`;
+    this.topPanel.style.flex = "0 0 auto";
+
+    // Вычисляем высоту нижней панели
+    const totalHeight = rightContainerRect.height;
+    const remainingHeight =
+      totalHeight - actualHeight - this.horizontalDividerThickness;
+
+    this.bottomPanel.style.height = `${Math.max(5, remainingHeight)}px`;
     this.bottomPanel.style.flex = "1";
 
-    // Сохраняем в localStorage
-    localStorage.setItem("topPanelHeight", `${newHeight}px`);
+    // Сохраняем высоту
+    localStorage.setItem("topPanelHeight", `${actualHeight}px`);
   }
 
   stopResize() {
     this.isVerticalResizing = false;
     this.isHorizontalResizing = false;
-
-    // Восстанавливаем курсор и выделение
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
   }
@@ -155,26 +190,55 @@ class ResizablePanels {
     const savedHeight = localStorage.getItem("topPanelHeight");
 
     if (savedWidth) {
-      this.leftPanel.style.width = savedWidth;
-      this.leftPanel.style.flex = "none";
+      const widthNum = parseInt(savedWidth);
+      this.leftPanel.style.width = `${Math.max(2, widthNum)}px`;
+      this.leftPanel.style.flex = "0 0 auto";
     }
 
     if (savedHeight) {
-      this.topPanel.style.height = savedHeight;
-      this.topPanel.style.flex = "none";
+      const heightNum = parseInt(savedHeight);
+      const rightContainerRect = this.rightContainer.getBoundingClientRect();
+
+      // Максимальная высота с учетом толщины разделителя
+      const maxHeight =
+        rightContainerRect.height - 50 - this.horizontalDividerThickness;
+      const actualHeight = Math.max(5, Math.min(heightNum, maxHeight));
+
+      this.topPanel.style.height = `${actualHeight}px`;
+      this.topPanel.style.flex = "0 0 auto";
+
+      const remainingHeight =
+        rightContainerRect.height -
+        actualHeight -
+        this.horizontalDividerThickness;
+      this.bottomPanel.style.height = `${Math.max(5, remainingHeight)}px`;
       this.bottomPanel.style.flex = "1";
     }
   }
-}
 
-// Инициализация при загрузке страницы
-document.addEventListener("DOMContentLoaded", () => {
-  new ResizablePanels();
-
-  // Добавляем функцию для сброса (для отладки)
-  window.resetLayout = function () {
+  resetLayout() {
     localStorage.removeItem("leftPanelWidth");
     localStorage.removeItem("topPanelHeight");
-    location.reload();
-  };
+
+    this.leftPanel.style.width = "";
+    this.leftPanel.style.flex = "";
+    this.topPanel.style.height = "";
+    this.topPanel.style.flex = "";
+    this.bottomPanel.style.height = "";
+    this.bottomPanel.style.flex = "";
+
+    setTimeout(() => {
+      this.setInitialSizes();
+    }, 10);
+  }
+}
+
+// Инициализация
+document.addEventListener("DOMContentLoaded", () => {
+  const resizable = new ResizablePanels();
+  window.resetLayout = () => resizable.resetLayout();
+
+  window.addEventListener("resize", () => {
+    setTimeout(() => resizable.restoreSizes(), 50);
+  });
 });
