@@ -8,13 +8,13 @@ class AgentOut(BaseModel):
     is_online: bool
 
     class Config:
-        orm_mode = True  # чтобы Pydantic мог работать с SQLAlchemy объектами
+        orm_mode = True
 
 
 class DepartmentOut(BaseModel):
     id: int
     name: str
-    agents: List[AgentOut]
+    agents: List[AgentOut] = []
 
     class Config:
         orm_mode = True
@@ -23,7 +23,7 @@ class DepartmentOut(BaseModel):
 class CompanyOut(BaseModel):
     id: int
     name: str
-    departments: List[DepartmentOut]
+    departments: List[DepartmentOut] = []
 
     class Config:
         orm_mode = True

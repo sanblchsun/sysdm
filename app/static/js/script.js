@@ -319,3 +319,133 @@ function selectAgent(agent) {
         <p>ID: ${agent.id}</p>
     `;
 }
+
+// =====================
+// AGENTS TREE
+// =====================
+
+const TreeState = {
+  data: null,
+};
+
+// Первый рендер
+async function loadTreeInitial() {
+  const res = await fetch("/api/v1/tree");
+  TreeState.data = await res.json();
+
+  const container = document.getElementById("agents-tree");
+  if (!container) return;
+
+  container.innerHTML = "";
+  renderTree(container, TreeState.data);
+}
+
+// Построение дерева
+function renderTree(container, companies) {
+  companies.forEach((company) => {
+    const companyDiv = document.createElement("div");
+    companyDiv.className = "tree-company";
+
+    const companyHeader = document.createElement("div");
+    companyHeader.className = "tree-company-header";
+    companyHeader.textContent = "▸ " + company.name;
+
+    const depList = document.createElement("ul");
+    depList.style.display = "none";
+    depList.classList.add("company-deps");
+
+    companyHeader.onclick = () => {
+      const opened = depList.style.display === "block";
+      depList.style.display = opened ? "none" : "block";
+      companyHeader.textContent = (opened ? "▸ " : "▾ ") + company.name;
+    };
+
+    company.departments.forEach((dep) => {
+      const depLi = document.createElement("li");
+
+      const depHeader = document.createElement("div");
+      depHeader.className = "tree-department-header";
+      depHeader.textContent = "▸ " + dep.name;
+
+      const agentList = document.createElement("ul");
+      agentList.style.display = "none";
+      agentList.classList.add("department-agents");
+
+      depHeader.onclick = () => {
+        const opened = agentList.style.display === "block";
+        agentList.style.display = opened ? "none" : "block";
+        depHeader.textContent = (opened ? "▸ " : "▾ ") + dep.name;
+      };
+
+      dep.agents.forEach((agent) => {
+        const agentLi = document.createElement("li");
+        agentLi.className = "agent";
+        agentLi.dataset.agentId = agent.id;
+
+        agentLi.innerHTML = `
+                  <span class="status-dot ${
+                    agent.is_online ? "online" : "offline"
+                  }"></span>
+                  ${agent.hostname}
+                `;
+
+        agentList.appendChild(agentLi);
+      });
+
+      depLi.appendChild(depHeader);
+      depLi.appendChild(agentList);
+      depList.appendChild(depLi);
+    });
+
+    companyDiv.appendChild(companyHeader);
+    companyDiv.appendChild(depList);
+    container.appendChild(companyDiv);
+  });
+}
+
+// Только обновление статусов
+async function refreshTreeStatus() {
+  const res = await fetch("/api/v1/tree");
+  const freshData = await res.json();
+
+  freshData.forEach((company) => {
+    company.departments.forEach((dep) => {
+      dep.agents.forEach((agent) => {
+        const el = document.querySelector(
+          `.agent[data-agent-id="${agent.id}"]`
+        );
+        if (!el) return;
+
+        const dot = el.querySelector(".status-dot");
+        dot.classList.toggle("online", agent.is_online);
+        dot.classList.toggle("offline", !agent.is_online);
+      });
+    });
+  });
+}
+
+// Инициализация
+document.addEventListener("DOMContentLoaded", () => {
+  loadTreeInitial();
+  setInterval(refreshTreeStatus, 5000);
+});
+
+document.getElementById("toggle-all")?.addEventListener("click", () => {
+  const deps = document.querySelectorAll(".company-deps");
+  const agents = document.querySelectorAll(".department-agents");
+  const companyHeaders = document.querySelectorAll(".tree-company-header");
+  const depHeaders = document.querySelectorAll(".tree-department-header");
+
+  const anyClosed = [...deps].some((d) => d.style.display === "none");
+
+  deps.forEach((d) => (d.style.display = anyClosed ? "block" : "none"));
+  agents.forEach((a) => (a.style.display = anyClosed ? "block" : "none"));
+
+  companyHeaders.forEach((h) => {
+    h.textContent = (anyClosed ? "▾ " : "▸ ") + h.textContent.slice(2);
+  });
+
+  depHeaders.forEach((h) => {
+    h.textContent = (anyClosed ? "▾ " : "▸ ") + h.textContent.slice(2);
+  });
+});
