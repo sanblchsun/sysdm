@@ -1,98 +1,180 @@
-/* ========= VERTICAL SPLITTER ========= */
-(() => {
-  const left = document.getElementById("agents-left");
-  const sep = document.getElementById("agents-separator");
-  if (!left || !sep) return;
+class ResizablePanels {
+  constructor() {
+    this.verticalDivider = document.getElementById("verticalDivider");
+    this.horizontalDivider = document.getElementById("horizontalDivider");
+    this.leftPanel = document.getElementById("leftPanel");
+    this.topPanel = document.getElementById("topPanel");
+    this.bottomPanel = document.getElementById("bottomPanel");
+    this.rightContainer = document.querySelector(".right-container");
+    this.container = document.querySelector(".container");
 
-  const minLeft = 180;
-  const minRight = 180;
-  const sepWidth = sep.offsetWidth || 6;
+    this.isVerticalResizing = false;
+    this.isHorizontalResizing = false;
 
-  const saved = document.cookie.match(/agents_left_width=(\d+)/);
-  if (saved) left.style.width = saved[1] + "px";
+    this.init();
+  }
 
-  let dragging = false;
+  init() {
+    this.setupEventListeners();
+    this.setInitialSizes();
+    this.restoreSizes();
+  }
 
-  const setWidth = (w) => {
-    const max = window.innerWidth - minRight - sepWidth;
-    const v = Math.min(max, Math.max(minLeft, w));
-    left.style.width = v + "px";
-    document.cookie = `agents_left_width=${v}; path=/; max-age=31536000`;
-  };
+  setInitialSizes() {
+    // Устанавливаем начальные размеры только если они не сохранены
+    if (!localStorage.getItem("leftPanelWidth")) {
+      this.leftPanel.style.width = "30%";
+    }
+    if (!localStorage.getItem("topPanelHeight")) {
+      // Начальная высота 50%
+      this.topPanel.style.height = "50%";
+      this.topPanel.style.flex = "none";
+    }
+  }
 
-  sep.addEventListener("mousedown", () => {
-    dragging = true;
+  setupEventListeners() {
+    // Вертикальный разделитель
+    this.verticalDivider.addEventListener(
+      "mousedown",
+      this.startVerticalResize.bind(this)
+    );
+
+    // Горизонтальный разделитель - ФИКСИРУЕМ
+    this.horizontalDivider.addEventListener(
+      "mousedown",
+      this.startHorizontalResize.bind(this)
+    );
+
+    // Обработчики для мыши
+    document.addEventListener("mousemove", this.handleMouseMove.bind(this));
+    document.addEventListener("mouseup", this.stopResize.bind(this));
+
+    // Для мобильных устройств
+    this.verticalDivider.addEventListener("touchstart", (e) => {
+      this.startVerticalResize(e.touches[0]);
+      document.addEventListener("touchmove", this.handleTouchMove.bind(this));
+      document.addEventListener("touchend", this.stopResize.bind(this));
+      e.preventDefault();
+    });
+
+    this.horizontalDivider.addEventListener("touchstart", (e) => {
+      this.startHorizontalResize(e.touches[0]);
+      document.addEventListener("touchmove", this.handleTouchMove.bind(this));
+      document.addEventListener("touchend", this.stopResize.bind(this));
+      e.preventDefault();
+    });
+  }
+
+  startVerticalResize(e) {
+    this.isVerticalResizing = true;
+    this.startX = e.clientX;
+    this.startWidth = this.leftPanel.offsetWidth;
+    this.containerWidth = this.container.offsetWidth;
+
     document.body.style.cursor = "col-resize";
-  });
+    document.body.style.userSelect = "none";
+    e.preventDefault();
+  }
 
-  document.addEventListener("mouseup", () => {
-    dragging = false;
-    document.body.style.cursor = "";
-  });
+  startHorizontalResize(e) {
+    this.isHorizontalResizing = true;
+    this.startY = e.clientY;
+    this.startHeight = this.topPanel.offsetHeight;
+    this.containerHeight = this.rightContainer.offsetHeight;
 
-  document.addEventListener("mousemove", (e) => {
-    if (dragging) setWidth(e.clientX);
-  });
-
-  sep.addEventListener("keydown", (e) => {
-    let w = left.offsetWidth;
-    if (e.key === "ArrowLeft") w -= 10;
-    if (e.key === "ArrowRight") w += 10;
-    setWidth(w);
-  });
-
-  window.addEventListener("resize", () => {
-    setWidth(left.offsetWidth);
-  });
-})();
-
-/* ========= HORIZONTAL SPLITTER ========= */
-(() => {
-  const top = document.getElementById("agents-top");
-  const sep = document.getElementById("agents-h-separator");
-  if (!top || !sep) return;
-
-  const minTop = 120;
-  const minBottom = 120;
-  const sepHeight = sep.offsetHeight || 6;
-
-  const saved = document.cookie.match(/agents_top_height=(\d+)/);
-  if (saved) top.style.height = saved[1] + "px";
-
-  let dragging = false;
-
-  const setHeight = (h) => {
-    const topOffset = top.getBoundingClientRect().top;
-    const max = window.innerHeight - topOffset - minBottom - sepHeight;
-    const v = Math.min(max, Math.max(minTop, h));
-    top.style.height = v + "px";
-    document.cookie = `agents_top_height=${v}; path=/; max-age=31536000`;
-  };
-
-  sep.addEventListener("mousedown", () => {
-    dragging = true;
     document.body.style.cursor = "row-resize";
-  });
+    document.body.style.userSelect = "none";
+    e.preventDefault();
+  }
 
-  document.addEventListener("mouseup", () => {
-    dragging = false;
+  handleMouseMove(e) {
+    if (this.isVerticalResizing) {
+      this.handleVerticalMove(e.clientX);
+    }
+    if (this.isHorizontalResizing) {
+      this.handleHorizontalMove(e.clientY);
+    }
+  }
+
+  handleTouchMove(e) {
+    if (this.isVerticalResizing && e.touches[0]) {
+      this.handleVerticalMove(e.touches[0].clientX);
+    }
+    if (this.isHorizontalResizing && e.touches[0]) {
+      this.handleHorizontalMove(e.touches[0].clientY);
+    }
+    e.preventDefault();
+  }
+
+  handleVerticalMove(clientX) {
+    const dx = clientX - this.startX;
+    const minWidth = 200;
+    const maxWidth = this.containerWidth - 200;
+    let newWidth = this.startWidth + dx;
+
+    // Ограничиваем размеры
+    newWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
+
+    // Применяем новые размеры
+    this.leftPanel.style.width = `${newWidth}px`;
+    this.leftPanel.style.flex = "none";
+
+    // Сохраняем в localStorage
+    localStorage.setItem("leftPanelWidth", `${newWidth}px`);
+  }
+
+  handleHorizontalMove(clientY) {
+    const dy = clientY - this.startY;
+    const minHeight = 100;
+    const maxHeight = this.containerHeight - 100;
+    let newHeight = this.startHeight + dy;
+
+    // Ограничиваем размеры
+    newHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
+
+    // Применяем новые размеры
+    this.topPanel.style.height = `${newHeight}px`;
+    this.topPanel.style.flex = "none";
+    this.bottomPanel.style.flex = "1";
+
+    // Сохраняем в localStorage
+    localStorage.setItem("topPanelHeight", `${newHeight}px`);
+  }
+
+  stopResize() {
+    this.isVerticalResizing = false;
+    this.isHorizontalResizing = false;
+
+    // Восстанавливаем курсор и выделение
     document.body.style.cursor = "";
-  });
+    document.body.style.userSelect = "";
+  }
 
-  document.addEventListener("mousemove", (e) => {
-    if (!dragging) return;
-    const topOffset = top.getBoundingClientRect().top;
-    setHeight(e.clientY - topOffset);
-  });
+  restoreSizes() {
+    const savedWidth = localStorage.getItem("leftPanelWidth");
+    const savedHeight = localStorage.getItem("topPanelHeight");
 
-  sep.addEventListener("keydown", (e) => {
-    let h = top.offsetHeight;
-    if (e.key === "ArrowUp") h -= 10;
-    if (e.key === "ArrowDown") h += 10;
-    setHeight(h);
-  });
+    if (savedWidth) {
+      this.leftPanel.style.width = savedWidth;
+      this.leftPanel.style.flex = "none";
+    }
 
-  window.addEventListener("resize", () => {
-    setHeight(top.offsetHeight);
-  });
-})();
+    if (savedHeight) {
+      this.topPanel.style.height = savedHeight;
+      this.topPanel.style.flex = "none";
+      this.bottomPanel.style.flex = "1";
+    }
+  }
+}
+
+// Инициализация при загрузке страницы
+document.addEventListener("DOMContentLoaded", () => {
+  new ResizablePanels();
+
+  // Добавляем функцию для сброса (для отладки)
+  window.resetLayout = function () {
+    localStorage.removeItem("leftPanelWidth");
+    localStorage.removeItem("topPanelHeight");
+    location.reload();
+  };
+});

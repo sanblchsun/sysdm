@@ -2,61 +2,46 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <title>Agents</title>
-    <link rel="stylesheet" href="/static/css/style.css" />
-    <script src="/static/js/script.js" defer></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Адаптивный сайт с разделителями</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', path='/css/style.css') }}"
+    />
   </head>
   <body>
-    <header class="header">
-      <h1>Agents dashboard</h1>
-    </header>
+    <div class="container">
+      <div class="left-panel" id="leftPanel">
+        <div class="panel-content">
+          <h2>Левая панель</h2>
+          <p>Содержимое левой части сайта.</p>
+          <p>Можно добавлять любой контент: текст, изображения, формы и т.д.</p>
+        </div>
+      </div>
 
-    <main class="agents-layout">
-      <!-- LEFT -->
-      <aside class="agents-left" id="agents-left">
-        <h2>Age nts</h2>
-        <ul>
-          <li>Agent 1</li>
-          <li>Agent 2</li>
-          <li>Agent 3</li>
-          <li>Agent 4</li>
-        </ul>
-      </aside>
+      <div class="vertical-divider" id="verticalDivider"></div>
 
-      <!-- VERTICAL SPLITTER -->
-      <div
-        id="agents-separator"
-        class="agents-separator"
-        role="separator"
-        tabindex="0"
-        aria-orientation="vertical"
-      ></div>
-
-      <!-- RIGHT -->
-      <section class="agents-right">
-        <!-- TOP -->
-        <div class="agents-top" id="agents-top">
-          <h2>Top panel</h2>
-          <p>Some content here…</p>
+      <div class="right-container">
+        <div class="top-panel" id="topPanel">
+          <div class="panel-content">
+            <h2>Верхняя правая панель</h2>
+            <p>Содержимое верхней правой части.</p>
+            <p>Это панель разделена горизонтальным разделителем.</p>
+          </div>
         </div>
 
-        <!-- HORIZONTAL SPLITTER -->
-        <div
-          id="agents-h-separator"
-          class="agents-h-separator"
-          role="separator"
-          tabindex="0"
-          aria-orientation="horizontal"
-        ></div>
+        <div class="horizontal-divider" id="horizontalDivider"></div>
 
-        <!-- BOTTOM -->
-        <div class="agents-bottom">
-          <h2>Bottom panel</h2>
-          <p>Logs / details here…</p>
+        <div class="bottom-panel" id="bottomPanel">
+          <div class="panel-content">
+            <h2>Нижняя правая панель</h2>
+            <p>Содержимое нижней правой части.</p>
+            <p>Все разделители можно перемещать мышкой!</p>
+          </div>
         </div>
-      </section>
-    </main>
+      </div>
+    </div>
 
-    <footer class="footer">SysDM © 2026</footer>
+    <script src="{{ url_for('static', path='/js/script.js') }}"></script>
   </body>
 </html>
