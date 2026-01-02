@@ -108,8 +108,8 @@ class ResizablePanels {
 
   handleVerticalMove(clientX) {
     const dx = clientX - this.startX;
-    const minWidth = 200;
-    const maxWidth = this.containerWidth - 200;
+    const minWidth = 1;
+    const maxWidth = this.containerWidth - 50;
     let newWidth = this.startWidth + dx;
 
     // Ограничиваем размеры
@@ -125,8 +125,8 @@ class ResizablePanels {
 
   handleHorizontalMove(clientY) {
     const dy = clientY - this.startY;
-    const minHeight = 100;
-    const maxHeight = this.containerHeight - 100;
+    const minHeight = 0;
+    const maxHeight = this.containerHeight - 30;
     let newHeight = this.startHeight + dy;
 
     // Ограничиваем размеры

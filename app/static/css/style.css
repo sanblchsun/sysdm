@@ -36,8 +36,8 @@ body {
 
 .left-panel {
   width: 30%;
-  min-width: 200px;
-  max-width: 500px;
+  min-width: 2px;
+  max-width: 100%;
 }
 
 .top-panel,
@@ -51,11 +51,11 @@ body {
 }
 
 .top-panel {
-  min-height: 100px;
+  min-height: 5px;
 }
 
 .bottom-panel {
-  min-height: 100px;
+  min-height: 5px;
 }
 
 .vertical-divider {
