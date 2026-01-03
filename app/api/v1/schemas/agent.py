@@ -16,3 +16,16 @@ class AgentCheckinOut(BaseModel):
 class AgentRegister(BaseModel):
     hostname: str
     department_id: int
+
+
+class InstallTokenOut(BaseModel):
+    token: str
+
+
+class AgentInstallIn(BaseModel):
+    hostname: str
+    token: str
+
+
+class AgentInstallOut(BaseModel):
+    agent_id: int
