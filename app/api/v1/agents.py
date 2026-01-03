@@ -6,7 +6,13 @@ from app.models.company import Company
 from app.models.department import Department
 from app.database import get_session
 from app.models.agent import Agent
-from app.api.v1.schemas.agent import AgentCheckinIn, AgentCheckinOut, AgentInstallIn, AgentInstallOut, InstallTokenOut
+from app.api.v1.schemas.agent import (
+    AgentCheckinIn,
+    AgentCheckinOut,
+    AgentInstallIn,
+    AgentInstallOut,
+    InstallTokenOut,
+)
 from app.api.v1.schemas.agent import AgentRegister
 from app.models.install_token import InstallToken
 
@@ -91,6 +97,7 @@ async def generate_install_token(
 
     return {"token": token.token}
 
+
 @router.post("/install", response_model=AgentInstallOut)
 async def install_agent(
     payload: AgentInstallIn,
@@ -106,7 +113,6 @@ async def install_agent(
 
     agent = Agent(
         hostname=payload.hostname,
-        company_id=token.company_id,
         department_id=token.department_id,
         is_online=False,
     )
@@ -120,4 +126,3 @@ async def install_agent(
     await session.commit()
 
     return {"agent_id": agent.id}
-
