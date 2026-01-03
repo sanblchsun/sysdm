@@ -1,3 +1,4 @@
+import secrets
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,8 +30,6 @@ class Agent(Base):
 
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-
     department_id: Mapped[int] = mapped_column(
         ForeignKey("departments.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -38,3 +37,8 @@ class Agent(Base):
     last_seen: Mapped[datetime | None] = mapped_column(DateTime)
 
     department: Mapped["Department"] = relationship(back_populates="agents")
+
+    # токен для установки
+    install_token: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, default=lambda: secrets.token_hex(32)
+    )
