@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -25,14 +25,14 @@ async def agent_checkin(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     agent.is_online = True
-    agent.last_seen = datetime.utcnow()
+    agent.last_seen = datetime.now(timezone.utc)
 
     await session.commit()
 
     return {
         "status": "ok",
         "agent_id": agent.id,
-        "server_time": datetime.utcnow(),
+        "server_time": datetime.now(timezone.utc),
         "tasks": [],
     }
 

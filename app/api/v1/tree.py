@@ -15,9 +15,9 @@ router = APIRouter(prefix="/tree", tags=["Tree"])
 async def get_tree(db: AsyncSession = Depends(get_session)):
     # загружаем все активные компании с отделами и агентами
     result = await db.execute(
-        select(Company)
-        .filter(Company.is_active == True)
-        .options(selectinload(Company.departments).selectinload(Department.agents))
+        select(Company).options(
+            selectinload(Company.departments).selectinload(Department.agents)
+        )
     )
     companies = result.scalars().unique().all()
     return companies

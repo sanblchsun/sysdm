@@ -22,7 +22,6 @@ class Agent(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-
     hostname: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
     ip_address: Mapped[str | None] = mapped_column(String(45))
@@ -30,15 +29,12 @@ class Agent(Base):
 
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
-    department_id: Mapped[int] = mapped_column(
-        ForeignKey("departments.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    last_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
 
     department: Mapped["Department"] = relationship(back_populates="agents")
-
-    # токен для установки
-    install_token: Mapped[str] = mapped_column(
-        String(64), unique=True, nullable=False, default=lambda: secrets.token_hex(32)
-    )

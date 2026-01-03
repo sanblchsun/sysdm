@@ -13,7 +13,6 @@ class Company(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    is_active: Mapped[bool] = mapped_column(default=True)
 
     departments: Mapped[list["Department"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
