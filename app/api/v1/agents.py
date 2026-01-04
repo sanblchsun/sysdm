@@ -13,10 +13,13 @@ from app.api.v1.schemas.agent import (
     AgentInstallOut,
     InstallTokenOut,
 )
-from app.api.v1.schemas.agent import AgentRegister
+from app.api.v1.schemas.agent import AgentRegister, AgentListItem
 from app.models.install_token import InstallToken
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+from fastapi import Query
+from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import selectinload
 
 
 @router.post("/checkin", response_model=AgentCheckinOut)
@@ -126,3 +129,37 @@ async def install_agent(
     await session.commit()
 
     return {"agent_id": agent.id}
+
+
+@router.get("/list", response_model=list[AgentListItem])
+async def list_agents(
+    company_id: int | None = None,
+    department_id: int | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    stmt = select(Agent).options(
+        selectinload(Agent.department).selectinload(Department.company)
+    )
+
+    if department_id:
+        stmt = stmt.where(Agent.department_id == department_id)
+
+    elif company_id:
+        stmt = stmt.join(Department).where(Department.company_id == company_id)
+
+    result = await session.execute(stmt)
+    agents = result.scalars().all()
+
+    return [
+        AgentListItem(
+            id=a.id,
+            hostname=a.hostname,
+            company=a.department.company.name,
+            department=a.department.name,
+            is_online=a.is_online,
+            last_seen=a.last_seen,
+            ip_address=a.ip_address,
+            os=a.os,
+        )
+        for a in agents
+    ]

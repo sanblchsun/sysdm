@@ -358,6 +358,8 @@ function renderTree(container, companies) {
       const opened = depList.style.display === "block";
       depList.style.display = opened ? "none" : "block";
       companyHeader.textContent = (opened ? "▸ " : "▾ ") + company.name;
+      // 🔹 ЗАГРУЖАЕМ АГЕНТОВ КОМПАНИИ
+      loadAgents({ companyId: company.id });
     };
 
     company.departments.forEach((dep) => {
@@ -375,6 +377,9 @@ function renderTree(container, companies) {
         const opened = agentList.style.display === "block";
         agentList.style.display = opened ? "none" : "block";
         depHeader.textContent = (opened ? "▸ " : "▾ ") + dep.name;
+
+        // 🔹 ЗАГРУЖАЕМ АГЕНТОВ ОТДЕЛА
+        loadAgents({ departmentId: dep.id });
       };
 
       dep.agents.forEach((agent) => {
@@ -449,3 +454,55 @@ document.getElementById("toggle-all")?.addEventListener("click", () => {
     h.textContent = (anyClosed ? "▾ " : "▸ ") + h.textContent.slice(2);
   });
 });
+
+async function loadAgents({ companyId = null, departmentId = null } = {}) {
+  let url = "/api/v1/agents/list";
+
+  if (departmentId) {
+    url += `?department_id=${departmentId}`;
+  } else if (companyId) {
+    url += `?company_id=${companyId}`;
+  }
+
+  const res = await fetch(url);
+  const agents = await res.json();
+
+  renderAgentsTable(agents);
+}
+
+function formatLastSeen(ts) {
+  if (!ts) return "-";
+
+  const dt = new Date(ts);
+  const now = new Date();
+
+  const sameDay = dt.toDateString() === now.toDateString();
+  const time = dt.toLocaleTimeString();
+
+  return sameDay ? `Сегодня ${time}` : dt.toLocaleString();
+}
+
+function renderAgentsTable(agents) {
+  const tbody = document.querySelector("#agents-table tbody");
+  tbody.innerHTML = "";
+
+  for (const a of agents) {
+    const tr = document.createElement("tr");
+
+    tr.innerHTML = `
+            <td title="IP: ${a.ip_address ?? "-"}\nOS: ${a.os ?? "-"}">
+                ${a.hostname}
+            </td>
+            <td>${a.company}</td>
+            <td>${a.department}</td>
+            <td>
+                <span class="status-dot ${
+                  a.is_online ? "online" : "offline"
+                }"></span>
+            </td>
+            <td>${formatLastSeen(a.last_seen)}</td>
+        `;
+
+    tbody.appendChild(tr);
+  }
+}

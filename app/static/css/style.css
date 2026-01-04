@@ -521,3 +521,22 @@ body {
   font-weight: 500;
   margin-top: 4px;
 }
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.online {
+  background-color: #2ecc71;
+}
+
+.status-dot.offline {
+  background-color: #7f8c8d;
+}
+
+.agents-table-wrapper {
+  padding: 10px;
+}
