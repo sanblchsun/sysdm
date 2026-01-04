@@ -495,7 +495,9 @@ function renderAgentsTable(agents) {
     const tr = document.createElement("tr");
 
     tr.innerHTML = `
-      <td title="IP: ${a.ip_address ?? "-"}\nOS: ${a.os ?? "-"}">
+      <td class="agent-name"
+          title="IP: ${a.ip_address ?? "-"}\nOS: ${a.os ?? "-"}">
+        <i class="fas fa-desktop"></i>
         ${a.hostname}
       </td>
       <td>${a.company}</td>
@@ -522,6 +524,35 @@ function renderAgentsTable(agents) {
     };
 
     tbody.appendChild(tr);
+
+    // ПКМ
+    tr.oncontextmenu = (e) => {
+      e.preventDefault();
+
+      contextMenu.style.top = e.clientY + "px";
+      contextMenu.style.left = e.clientX + "px";
+      contextMenu.style.display = "block";
+
+      contextMenu.onclick = (evt) => {
+        const action = evt.target.dataset.action;
+        if (!action) return;
+
+        if (action === "details") {
+          renderAgentDetails(a);
+          startAgentDetailsAutoRefresh(a);
+        }
+
+        if (action === "refresh") {
+          refreshAgentDetails();
+        }
+
+        if (action === "reboot") {
+          alert("Reboot: скоро вернусь 😄");
+        }
+
+        contextMenu.style.display = "none";
+      };
+    };
   }
 }
 
@@ -608,3 +639,9 @@ function stopAgentDetailsAutoRefresh() {
   AgentDetailsState.timer = null;
   AgentDetailsState.agentId = null;
 }
+
+const contextMenu = document.getElementById("agent-context-menu");
+
+document.addEventListener("click", () => {
+  contextMenu.style.display = "none";
+});

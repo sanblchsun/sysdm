@@ -562,3 +562,40 @@ body {
   color: #888;
   font-size: 12px;
 }
+
+.agent-name i {
+  margin-right: 6px;
+  color: #6c757d;
+}
+
+.status-dot.online {
+  background: #28a745;
+}
+
+.status-dot.offline {
+  background: #adb5bd;
+}
+
+.context-menu {
+  position: fixed;
+  background: #d4d0d0;
+  border: 1px solid #333;
+  display: none;
+  z-index: 1000;
+  min-width: 160px;
+}
+
+.context-menu div {
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.context-menu div:hover {
+  background: #e0e0bc;
+}
+
+.context-menu .divider {
+  height: 1px;
+  background: #444444;
+  margin: 4px 0;
+}
