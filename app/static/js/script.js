@@ -324,6 +324,11 @@ function selectAgent(agent) {
 // AGENTS TREE
 // =====================
 
+const AgentDetailsState = {
+  agentId: null,
+  timer: null,
+};
+
 const TreeState = {
   data: null,
 };
@@ -513,6 +518,7 @@ function renderAgentsTable(agents) {
 
       // показываем детали в нижней панели
       renderAgentDetails(a);
+      startAgentDetailsAutoRefresh(a);
     };
 
     tbody.appendChild(tr);
@@ -561,4 +567,44 @@ function renderAgentDetails(agent) {
       ${agent.id}
     </p>
   `;
+}
+
+async function refreshAgentDetails() {
+  if (!AgentDetailsState.agentId) return;
+
+  try {
+    const res = await fetch("/api/v1/agents/list");
+    const agents = await res.json();
+
+    const agent = agents.find((a) => a.id === AgentDetailsState.agentId);
+    if (!agent) return;
+
+    renderAgentDetails(agent);
+
+    // если агент стал offline — останавливаем автообновление
+    if (!agent.is_online) {
+      stopAgentDetailsAutoRefresh();
+    }
+  } catch (err) {
+    console.error("Failed to refresh agent details", err);
+  }
+}
+
+function startAgentDetailsAutoRefresh(agent) {
+  stopAgentDetailsAutoRefresh();
+
+  AgentDetailsState.agentId = agent.id;
+
+  if (agent.is_online) {
+    AgentDetailsState.timer = setInterval(refreshAgentDetails, 5000);
+  }
+}
+
+function stopAgentDetailsAutoRefresh() {
+  if (AgentDetailsState.timer) {
+    clearInterval(AgentDetailsState.timer);
+  }
+
+  AgentDetailsState.timer = null;
+  AgentDetailsState.agentId = null;
 }
