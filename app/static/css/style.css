@@ -540,3 +540,25 @@ body {
 .agents-table-wrapper {
   padding: 10px;
 }
+
+#agents-table tr {
+  cursor: pointer;
+}
+
+#agents-table tr.selected {
+  background-color: rgba(0, 123, 255, 0.15);
+}
+
+.agent-details {
+  padding: 10px;
+  font-size: 14px;
+}
+
+.agent-details h3 {
+  margin-top: 0;
+}
+
+.agent-details .label {
+  color: #888;
+  font-size: 12px;
+}

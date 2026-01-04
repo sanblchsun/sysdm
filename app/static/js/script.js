@@ -490,19 +490,75 @@ function renderAgentsTable(agents) {
     const tr = document.createElement("tr");
 
     tr.innerHTML = `
-            <td title="IP: ${a.ip_address ?? "-"}\nOS: ${a.os ?? "-"}">
-                ${a.hostname}
-            </td>
-            <td>${a.company}</td>
-            <td>${a.department}</td>
-            <td>
-                <span class="status-dot ${
-                  a.is_online ? "online" : "offline"
-                }"></span>
-            </td>
-            <td>${formatLastSeen(a.last_seen)}</td>
-        `;
+      <td title="IP: ${a.ip_address ?? "-"}\nOS: ${a.os ?? "-"}">
+        ${a.hostname}
+      </td>
+      <td>${a.company}</td>
+      <td>${a.department}</td>
+      <td>
+        <span class="status-dot ${a.is_online ? "online" : "offline"}"></span>
+      </td>
+      <td>${formatLastSeen(a.last_seen)}</td>
+    `;
+
+    // 🔹 КЛИК ПО СТРОКЕ ТАБЛИЦЫ
+    tr.onclick = () => {
+      // снимаем выделение со всех строк
+      document
+        .querySelectorAll("#agents-table tr.selected")
+        .forEach((row) => row.classList.remove("selected"));
+
+      // выделяем текущую
+      tr.classList.add("selected");
+
+      // показываем детали в нижней панели
+      renderAgentDetails(a);
+    };
 
     tbody.appendChild(tr);
   }
+}
+
+function renderAgentDetails(agent) {
+  const details = document.getElementById("agent-details");
+  if (!details) return;
+
+  details.innerHTML = `
+    <h3>${agent.hostname}</h3>
+
+    <p>
+      <span class="label">Статус:</span>
+      <b>${agent.is_online ? "Online" : "Offline"}</b>
+    </p>
+
+    <p>
+      <span class="label">Компания:</span>
+      ${agent.company}
+    </p>
+
+    <p>
+      <span class="label">Отдел:</span>
+      ${agent.department}
+    </p>
+
+    <p>
+      <span class="label">Последний раз онлайн:</span>
+      ${formatLastSeen(agent.last_seen)}
+    </p>
+
+    <p>
+      <span class="label">IP:</span>
+      ${agent.ip_address ?? "-"}
+    </p>
+
+    <p>
+      <span class="label">OS:</span>
+      ${agent.os ?? "-"}
+    </p>
+
+    <p>
+      <span class="label">Agent ID:</span>
+      ${agent.id}
+    </p>
+  `;
 }
