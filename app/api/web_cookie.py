@@ -62,19 +62,12 @@ async def logout(response: Response):
     return {"message": "Successfully logged out"}
 
 
-# -------------------- AGENTS (защищённый) --------------------
+# -------------------- AGENTS (HTML) --------------------
 @router.get("/agents")
-async def protected_route(request: Request):
-    """Protected route that requires a valid access token from any location."""
-    try:
-        # get and verify the token from the request
-        token = await auth.get_access_token_from_request(request)
-        payload = auth.verify_token(token, verify_csrf=False)
-
-    except Exception as e:
-        return RedirectResponse(url="/login", status_code=401)
-
+async def agents_page(request: Request):
     return templates.TemplateResponse(
         "agents.html",
-        {"request": request, "user": payload.sub, "agents": "agents_data"},
+        {
+            "request": request,
+        },
     )

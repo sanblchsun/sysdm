@@ -7,9 +7,11 @@ from app.core.authx import auth
 from fastapi import FastAPI
 from app.api.v1 import api_router
 from app.api.v1 import tree, agents
+from app.middleware.auth_html import AuthHTMLMiddleware
 
 
 app = FastAPI(title="SysDM RMM")
+app.add_middleware(AuthHTMLMiddleware)
 
 
 # Подключаем статические файлы

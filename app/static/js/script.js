@@ -532,7 +532,7 @@ function renderAgentsTable(agents) {
       contextMenu.style.top = e.clientY + "px";
       contextMenu.style.left = e.clientX + "px";
       contextMenu.style.display = "block";
-
+ 
       contextMenu.onclick = (evt) => {
         const action = evt.target.dataset.action;
         if (!action) return;
@@ -645,3 +645,17 @@ const contextMenu = document.getElementById("agent-context-menu");
 document.addEventListener("click", () => {
   contextMenu.style.display = "none";
 });
+
+
+const _fetch = window.fetch;
+
+window.fetch = async (...args) => {
+  const res = await _fetch(...args);
+
+  if (res.status === 401) {
+    window.location.href = "/login";
+    return Promise.reject("Unauthorized");
+  }
+
+  return res;
+};
