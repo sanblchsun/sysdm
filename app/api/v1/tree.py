@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from app.api.deps import require_user
 from app.database import get_session
 from app.models.company import Company
 from app.models.department import Department
@@ -12,7 +13,7 @@ router = APIRouter(prefix="/tree", tags=["Tree"])
 
 
 @router.get("", response_model=List[CompanyOut])
-async def get_tree(db: AsyncSession = Depends(get_session)):
+async def get_tree(user=Depends(require_user),db: AsyncSession = Depends(get_session)):
     # загружаем все активные компании с отделами и агентами
     result = await db.execute(
         select(Company).options(
