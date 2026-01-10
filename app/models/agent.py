@@ -33,7 +33,7 @@ class Agent(Base):
 
     department_id: Mapped[int] = mapped_column(
         ForeignKey("departments.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 

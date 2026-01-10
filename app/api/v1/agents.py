@@ -51,18 +51,16 @@ async def register_agent(
     payload: AgentRegister,
     session: AsyncSession = Depends(get_session),
 ):
-    # Проверяем, что отдел существует
-    result = await session.execute(
-        select(Department).where(Department.id == payload.department_id)
-    )
-    department = result.scalar_one_or_none()
+    # Проверяем, что компания существует
+    company = await session.get(Company, payload.company_id)
+    if not company:
+        raise HTTPException(status_code=400, detail="Company not found")
 
-    if not department:
-        raise HTTPException(status_code=400, detail="Department not found")
-
+    # Создаём агента БЕЗ department_id
     agent = Agent(
         hostname=payload.hostname,
-        department_id=payload.department_id,
+        company_id=payload.company_id,
+        department_id=None,  # ← ВАЖНО
         is_online=False,
     )
 
