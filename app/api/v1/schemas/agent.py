@@ -15,7 +15,6 @@ class AgentCheckinOut(BaseModel):
 
 class AgentRegister(BaseModel):
     hostname: str
-    os: str | None = None
     company_id: int
 
 

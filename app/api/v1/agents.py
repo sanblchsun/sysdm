@@ -2,30 +2,29 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+from app.database import get_session
 from app.models.company import Company
 from app.models.department import Department
-from app.database import get_session
 from app.models.agent import Agent
+from app.models.install_token import InstallToken
 from app.api.v1.schemas.agent import (
     AgentCheckinIn,
     AgentCheckinOut,
     AgentInstallIn,
     AgentInstallOut,
     InstallTokenOut,
+    AgentRegister,
+    AgentListItem,
 )
-from app.api.v1.schemas.agent import AgentRegister, AgentListItem
-from app.models.install_token import InstallToken
 
 router = APIRouter(prefix="/agents", tags=["agents"])
-from fastapi import Query
-from sqlalchemy.orm import joinedload
-from sqlalchemy.orm import selectinload
 
 
 @router.post("/checkin", response_model=AgentCheckinOut)
 async def agent_checkin(
-    payload: AgentCheckinIn,
-    session: AsyncSession = Depends(get_session),
+    payload: AgentCheckinIn, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(select(Agent).where(Agent.id == payload.agent_id))
     agent = result.scalar_one_or_none()
@@ -48,19 +47,24 @@ async def agent_checkin(
 
 @router.post("/register")
 async def register_agent(
-    payload: AgentRegister,
-    session: AsyncSession = Depends(get_session),
+    payload: AgentRegister, session: AsyncSession = Depends(get_session)
 ):
-    # Проверяем, что компания существует
+    """
+    Регистрация нового агента.
+    Новый агент автоматически помещается в отдел 'Unassigned' компании.
+    """
+    # Проверяем что компания существует
     company = await session.get(Company, payload.company_id)
     if not company:
-        raise HTTPException(status_code=400, detail="Company not found")
+        raise HTTPException(status_code=404, detail="Company not found")
 
-    # Создаём агента БЕЗ department_id
+    # Получаем или создаем Unassigned отдел
+    department = await Department.get_or_create_unassigned(payload.company_id, session)
+
     agent = Agent(
         hostname=payload.hostname,
         company_id=payload.company_id,
-        department_id=None,  # ← ВАЖНО
+        department_id=department.id,
         is_online=False,
     )
 
@@ -73,25 +77,17 @@ async def register_agent(
 
 @router.post("/install-token", response_model=InstallTokenOut)
 async def generate_install_token(
-    company_id: int,
-    department_id: int,
-    session: AsyncSession = Depends(get_session),
+    company_id: int, department_id: int, session: AsyncSession = Depends(get_session)
 ):
-    # ✅ проверка company
     company = await session.get(Company, company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    # ✅ проверка department
     department = await session.get(Department, department_id)
     if not department:
         raise HTTPException(status_code=404, detail="Department not found")
 
-    token = InstallToken(
-        company_id=company_id,
-        department_id=department_id,
-    )
-
+    token = InstallToken(company_id=company_id, department_id=department_id)
     session.add(token)
     await session.commit()
     await session.refresh(token)
@@ -101,8 +97,7 @@ async def generate_install_token(
 
 @router.post("/install", response_model=AgentInstallOut)
 async def install_agent(
-    payload: AgentInstallIn,
-    session: AsyncSession = Depends(get_session),
+    payload: AgentInstallIn, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(
         select(InstallToken).where(InstallToken.token == payload.token)
@@ -115,6 +110,7 @@ async def install_agent(
     agent = Agent(
         hostname=payload.hostname,
         department_id=token.department_id,
+        company_id=token.company_id,
         is_online=False,
     )
 
@@ -122,7 +118,7 @@ async def install_agent(
     await session.commit()
     await session.refresh(agent)
 
-    # ❗ одноразовый токен
+    # одноразовый токен
     await session.delete(token)
     await session.commit()
 
@@ -141,7 +137,6 @@ async def list_agents(
 
     if department_id:
         stmt = stmt.where(Agent.department_id == department_id)
-
     elif company_id:
         stmt = stmt.join(Department).where(Department.company_id == company_id)
 
