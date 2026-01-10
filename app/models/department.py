@@ -2,10 +2,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.models.company import Company
-
-if TYPE_CHECKING:
     from app.models.agent import Agent
-
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
