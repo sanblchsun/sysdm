@@ -15,7 +15,8 @@ class AgentCheckinOut(BaseModel):
 
 class AgentRegister(BaseModel):
     hostname: str
-    department_id: int
+    os: str | None = None
+    company_id: int
 
 
 class InstallTokenOut(BaseModel):
