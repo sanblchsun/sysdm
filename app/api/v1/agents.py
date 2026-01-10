@@ -1,3 +1,4 @@
+from fastapi import Path
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -156,3 +157,32 @@ async def list_agents(
         )
         for a in agents
     ]
+
+
+@router.patch("/move/{agent_id}")
+async def move_agent(
+    agent_id: int = Path(..., description="ID агента"),
+    new_department_id: int | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    # Найти агента
+    result = await session.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Если передан новый отдел — проверяем, существует ли он
+    if new_department_id:
+        department = await session.get(Department, new_department_id)
+        if not department:
+            raise HTTPException(status_code=404, detail="Department not found")
+        agent.department_id = department.id
+
+    await session.commit()
+    await session.refresh(agent)
+
+    return {
+        "agent_id": agent.id,
+        "department_id": agent.department_id,
+        "message": f"Agent moved to department {agent.department.name}",
+    }
