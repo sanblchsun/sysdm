@@ -8,6 +8,33 @@
       rel="stylesheet"
       href="{{ url_for('static', path='/css/style.css') }}"
     />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+      }
+      ul {
+        list-style-type: none;
+        padding-left: 20px;
+      }
+      li {
+        margin: 5px 0;
+        cursor: pointer;
+      }
+      li > ul {
+        display: none;
+      } /* дочерние элементы скрыты по умолчанию */
+      button {
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      .agent {
+        font-style: italic;
+        color: green;
+        cursor: default;
+      }
+    </style>
     <link
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
@@ -29,35 +56,57 @@
             </button>
           </div>
 
-          <div class="panel-info">
-            <aside class="agents-left" id="left-panel">
-              <div id="agents-tree">
-                <ul class="tree">
-                  {% for company in tree %}
-                  <li class="company">
-                    <strong>{{ company.name }}</strong>
-                    <ul>
-                      {% for dept in company.departments %}
-                      <li class="department">
-                        {{ dept.name }}
-                        <ul>
-                          {% for agent in dept.agents %}
-                          <li class="agent">
-                            <a href="/agents/{{ agent.id }}">
-                              {{ agent.hostname }}
-                            </a>
-                          </li>
-                          {% endfor %}
-                        </ul>
-                      </li>
-                      {% endfor %}
-                    </ul>
-                  </li>
-                  {% endfor %}
-                </ul>
-              </div>
-            </aside>
-          </div>
+          <h2>Companies, Departments & Agents Tree</h2>
+          <ul id="tree">
+            <li>
+              <button>Company A</button>
+              <ul>
+                <li>
+                  <button>Department A1</button>
+                  <ul>
+                    <li class="agent">Agent A1-1</li>
+                    <li class="agent">Agent A1-2</li>
+                  </ul>
+                </li>
+                <li>
+                  <button>Department A2</button>
+                  <ul>
+                    <li class="agent">Agent A2-1</li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+            <li>
+              <button>Company B</button>
+              <ul>
+                <li>
+                  <button>Department B1</button>
+                  <ul>
+                    <li class="agent">Agent B1-1</li>
+                    <li class="agent">Agent B1-2</li>
+                    <li class="agent">Agent B1-3</li>
+                  </ul>
+                </li>
+                <li>
+                  <button>Department B2</button>
+                  <ul>
+                    <li class="agent">Agent B2-1</li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+            <li>
+              <button>Company C</button>
+              <ul>
+                <li>
+                  <button>Department C1</button>
+                  <ul>
+                    <li class="agent">Agent C1-1</li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+          </ul>
         </div>
       </div>
 
@@ -221,5 +270,28 @@
       <div data-action="reboot">🔌 Reboot</div>
     </div>
     <script src="{{ url_for('static', path='/js/script.js') }}"></script>
+    <script>
+      // Минимальный JS для сворачивания/разворачивания отдельных элементов
+      document.querySelectorAll("#tree li > button").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          const sublist = btn.nextElementSibling;
+          if (sublist && sublist.tagName === "UL") {
+            sublist.style.display =
+              sublist.style.display === "none" ? "block" : "none";
+          }
+        });
+      });
+
+      // Кнопка "Развернуть/Свернуть всё"
+      const toggleAllBtn = document.getElementById("toggle-all");
+      let expanded = false; // состояние дерева
+
+      toggleAllBtn.addEventListener("click", () => {
+        document.querySelectorAll("#tree ul").forEach((ul) => {
+          ul.style.display = expanded ? "none" : "block";
+        });
+        expanded = !expanded;
+      });
+    </script>
   </body>
 </html>
