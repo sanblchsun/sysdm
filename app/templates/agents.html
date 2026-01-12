@@ -31,9 +31,31 @@
 
           <div class="panel-info">
             <aside class="agents-left" id="left-panel">
-              <div class="tree-toolbar"></div>
-              <!-- дерево будет вставлено сюда -->
-              <div id="agents-tree"></div>
+              <div id="agents-tree">
+                <ul class="tree">
+                  {% for company in tree %}
+                  <li class="company">
+                    <strong>{{ company.name }}</strong>
+                    <ul>
+                      {% for dept in company.departments %}
+                      <li class="department">
+                        {{ dept.name }}
+                        <ul>
+                          {% for agent in dept.agents %}
+                          <li class="agent">
+                            <a href="/agents/{{ agent.id }}">
+                              {{ agent.hostname }}
+                            </a>
+                          </li>
+                          {% endfor %}
+                        </ul>
+                      </li>
+                      {% endfor %}
+                    </ul>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
             </aside>
           </div>
         </div>
@@ -93,7 +115,21 @@
                       <th>Last seen</th>
                     </tr>
                   </thead>
-                  <tbody></tbody>
+                  <tbody>
+                    {% for agent in agents %}
+                    <tr>
+                      <td>
+                        <a href="/agents/{{ agent.id }}">
+                          {{ agent.hostname }}
+                        </a>
+                      </td>
+                      <td>{{ agent.company.name if agent.company }}</td>
+                      <td>{{ agent.department.name if agent.department }}</td>
+                      <td>{{ agent.status }}</td>
+                      <td>{{ agent.last_seen }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
                 </table>
               </div>
             </div>
@@ -144,7 +180,16 @@
             <div class="panel-info">
               <div id="bottomPanel">
                 <div id="agent-details" class="agent-details">
+                  {% if selected_agent %}
+                  <h3>{{ selected_agent.hostname }}</h3>
+                  <ul>
+                    <li>Status: {{ selected_agent.status }}</li>
+                    <li>IP: {{ selected_agent.ip_address }}</li>
+                    <li>Last seen: {{ selected_agent.last_seen }}</li>
+                  </ul>
+                  {% else %}
                   <p class="muted">Выберите агента из таблицы выше</p>
+                  {% endif %}
                 </div>
               </div>
             </div>
