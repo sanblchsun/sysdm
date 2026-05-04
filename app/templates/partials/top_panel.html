@@ -1,0 +1,74 @@
+<!-- app/templates/partials/top_panel.html -->
+{% if company %}
+<div class="company-ip-form">
+  <form
+    hx-post="/api/agent/company/{{ company.id }}/set-external-ip"
+    hx-target="#top-right"
+    hx-swap="innerHTML"
+  >
+    <label>Фильтр при регистрации агента. Укажите внешний IP компании:</label>
+    <input
+      type="text"
+      name="external_ip"
+      value="{{ company.external_ip or '' }}"
+      placeholder="0.0.0.0"
+    />
+    <button type="submit">Сохранить</button>
+  </form>
+</div>
+{% endif %} {% if agents %}
+<table class="agents-table">
+  <thead>
+    <tr>
+      {% for col in agent_columns %}
+      <th>{{ col }}</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for agent in agents %}
+    <tr
+      data-agent-id="{{ agent.id }}"
+      hx-get="/ui/bottom-panel?agent_id={{ agent.id }}"
+      hx-target="#bottom-right"
+      hx-swap="innerHTML"
+      hx-trigger="click"
+    >
+      <!-- OS -->
+      <td>
+        {% if agent.system and "linux" in agent.system.lower() %}
+        <span class="icon-class icon-linux"></span>
+        {% elif agent.system and "mac" in agent.system.lower() %}
+        <span class="icon-class icon-apple"></span>
+        {% elif agent.system and "windows" in agent.system.lower() %}
+        <span class="icon-class icon-windows"></span>
+        {% else %}
+        <span>-</span>
+        {% endif %}
+      </td>
+
+      <td>{{ agent.name_pc }}</td>
+      <td>{{ agent.user_name or "-" }}</td>
+      <td>{{ agent.ip_addr or "-" }}</td>
+      <td>{{ agent.company_name }}</td>
+      <td>{{ agent.department_name or "Без отдела" }}</td>
+
+      <!-- ONLINE -->
+      <td>
+        <span
+          class="icon-class online-dot {% if agent.is_online %}online{% else %}offline{% endif %}"
+          title="Online status"
+        ></span>
+      </td>
+
+      <td>{{ agent.exe_version or "-" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-panel">
+  {% if company %} У компании пока нет агентов. {% else %} Выберите Company /
+  Department / Unassigned слева {% endif %}
+</div>
+{% endif %}
