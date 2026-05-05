@@ -1,6 +1,5 @@
 # Python
-*.exe
-builder/dist/agents/
+dist/agents/
 migrations/versions/
 certbot/
 cookies.txt
