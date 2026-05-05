@@ -1,0 +1,29 @@
+FROM debian:bookworm-slim
+FROM python:3.12.3-slim
+
+# Install build tools and MinGW-w64
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    mingw-w64 \
+    python3 \
+    python3-pip \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy project
+COPY . .
+
+# Verify MinGW installation
+RUN x86_64-w64-mingw32-g++ --version
+
+# Build command
+CMD ["python3", "builder_cpp/build_agents.py"]

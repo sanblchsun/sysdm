@@ -3,6 +3,7 @@ import os
 import subprocess
 import hashlib
 import sys
+import platform
 from pathlib import Path
 
 # Add project root to Python path
@@ -24,7 +25,16 @@ CPP_ENTRYPOINT = CPP_AGENT_DIR / "cmd" / "agent" / "main.cpp"
 GOOS = "windows"
 GOARCH = "amd64"
 
-GXX = "C:/msys64/ucrt64/bin/g++.exe"
+# Determine compiler based on OS
+CURRENT_OS = platform.system()
+if CURRENT_OS == "Windows":
+    GXX = "C:/msys64/ucrt64/bin/g++.exe"
+elif CURRENT_OS == "Linux":
+    # For Linux-to-Windows cross-compilation using MinGW-w64
+    GXX = "x86_64-w64-mingw32-g++"
+else:
+    # macOS or other
+    GXX = "x86_64-w64-mingw32-g++"
 
 
 def increment_build_slug(last_slug: str | None) -> str:
@@ -52,6 +62,8 @@ def build_exe(build_slug: str, server_url: str) -> Path:
     output_exe = DIST_DIR / f"agent_universal_{build_slug}.exe"
 
     print(f"[+] Building {output_exe.name}")
+    print(f"[i] Using compiler: {GXX}")
+    print(f"[i] Platform: {CURRENT_OS}")
 
     # Вшиваем параметры в исполняемый файл через макросы компилятора
     cmd = [
@@ -66,8 +78,18 @@ def build_exe(build_slug: str, server_url: str) -> Path:
         "-static",
     ]
 
+    # For Linux cross-compilation, add additional flags
+    if CURRENT_OS == "Linux":
+        print("[i] Using MinGW-w64 cross-compilation settings")
+
     print(f"[+] Running: {' '.join(cmd)}")
-    subprocess.run(" ".join(cmd), shell=True, check=True, cwd=str(CPP_AGENT_DIR))
+    
+    # Windows native: use shell=True
+    # Linux: use list directly without shell
+    if CURRENT_OS == "Windows":
+        subprocess.run(" ".join(cmd), shell=True, check=True, cwd=str(CPP_AGENT_DIR))
+    else:
+        subprocess.run(cmd, check=True, cwd=str(CPP_AGENT_DIR))
 
     return output_exe
 
