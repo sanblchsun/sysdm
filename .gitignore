@@ -1,4 +1,5 @@
 # Python
+*.exe
 builder/dist/agents/
 migrations/versions/
 certbot/
