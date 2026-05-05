@@ -48,7 +48,6 @@ async def top_panel(
         "Отдел",
         "Online",
         "exe_v",
-        "RDP",
         "Телеметрия",
     ]
 
