@@ -63,22 +63,15 @@
 
       <td>{{ agent.exe_version or "-" }}</td>
 
-       <!-- TELEMETRY MODE -->
-       <td>
-         <form id="tel-form-{{ agent.id }}" hx-post="/api/agent/{{ agent.id }}/telemetry-mode" hx-swap="none">
-           <input type="hidden" name="telemetry_mode" id="tel-val-{{ agent.id }}" value="{{ agent.telemetry_mode if agent.telemetry_mode != 'none' else 'none' }}">
-           <input type="checkbox"
-                  class="telemetry-toggle"
-                  data-agent-id="{{ agent.id }}"
-                  {% if agent.telemetry_mode != "none" %}checked{% endif %}
-                  onchange="
-                    var val = this.checked ? 'full' : 'none';
-                    document.getElementById('tel-val-{{ agent.id }}').value = val;
-                    this.form.dispatchEvent(new Event('submit'));
-                  "
-           />
-         </form>
-       </td>
+      <!-- RDP SELECTION -->
+      <td>
+        <input type="checkbox"
+               class="rdp-toggle"
+               data-agent-id="{{ agent.id }}"
+               data-agent-name="{{ agent.name_pc }}"
+               onchange="toggleRdpAgent({{ agent.id }}, this.checked, '{{ agent.name_pc }}')"
+        />
+      </td>
     </tr>
     {% endfor %}
   </tbody>

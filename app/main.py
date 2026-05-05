@@ -6,11 +6,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
 from app.api import pages
+from app.api import relay
 from fastapi.responses import RedirectResponse
 from app.api import web_cookie
 from app.middleware.auth_html import AuthHTMLMiddleware
 from app.api.agent import router as agent_router
-
 
 app = FastAPI(title="SysDM RMM")
 app.add_middleware(AuthHTMLMiddleware)
@@ -26,6 +26,7 @@ templates = Jinja2Templates(directory="app/templates")
 app.include_router(web_cookie.router, tags=["web"])
 app.include_router(pages.router)
 app.include_router(agent_router)
+app.include_router(relay.router)
 
 
 # Корневой путь перенаправляет на логин
