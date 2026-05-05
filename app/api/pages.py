@@ -48,6 +48,8 @@ async def top_panel(
         "Отдел",
         "Online",
         "exe_v",
+        "RDP",
+        "Телеметрия",
     ]
 
     # Если ничего не выбрано — просто пустая таблица
@@ -193,6 +195,35 @@ async def agents_status(
         "ts": now.isoformat(),
         "agents": agents,
     }
+
+
+# -------------------- RDP DASHBOARD --------------------
+@router.get("/rdp/dashboard")
+async def rdp_dashboard(request: Request):
+    """
+    RDP Dashboard - отображает список агентов с видеопотоком.
+    Клик по карточке открывает viewer для управления удаленным рабочим столом.
+    """
+    return templates.TemplateResponse(
+        "partials/rdp_dashboard.html",
+        {"request": request},
+    )
+
+
+# -------------------- RDP VIEWER --------------------
+@router.get("/rdp/viewer")
+async def rdp_viewer(
+    request: Request,
+    agent_id: Optional[str] = Query(None),
+):
+    """
+    RDP Viewer - полноэкранный просмотр и управление рабочим столом агента.
+    Параметр: agent_id - уникальный идентификатор агента
+    """
+    return templates.TemplateResponse(
+        "partials/rdp_view.html",
+        {"request": request, "agent_id": agent_id},
+    )
 
 
 # модальное окно

@@ -301,7 +301,7 @@
           (cur.codec || "?") +
           (cur.encoder ? "/" + cur.encoder : "") +
           (a.ctrl_connected ? " 🖱" : "");
-        c.link.href = `/static/view.html?id=${encodeURIComponent(a.id)}`;
+        c.link.href = `/templates/partials/rdp_view.html?id=${encodeURIComponent(a.id)}`;
 
         const wantSrc =
           cur.codec === "h264"
