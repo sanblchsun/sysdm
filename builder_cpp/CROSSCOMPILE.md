@@ -27,14 +27,40 @@ python build_agents.py
 
 ## Использование
 
-### Компиляция на Linux для Windows
+### Способ 1: Компиляция на Linux (встроенный MinGW-w64)
+
+Установите MinGW-w64 локально:
 
 ```bash
 # Активируйте виртуальное окружение
 source venv/bin/activate
 
+# Установите MinGW-w64
+bash builder_cpp/install_crosscompile_tools.sh
+
+# Проверьте окружение
+bash builder_cpp/check_crosscompile.sh
+
 # Запустите скрипт сборки
 python builder_cpp/build_agents.py
+```
+
+### Способ 2: Docker (рекомендуется)
+
+Docker способ удобнее, так как не требует установки зависимостей на хосте:
+
+```bash
+# Сборка и запуск с автоматическим созданием БД
+docker-compose -f docker-compose.build.yml up
+
+# Результат будет в ./dist/agents/
+```
+
+Альтернативно, если вам нужно только собрать бинарник без сохранения в БД:
+
+```bash
+docker build -f Dockerfile.crosscompile -t agent-builder .
+docker run -v $(pwd)/dist:/app/dist agent-builder
 ```
 
 Скрипт автоматически определит вашу ОС и выберет подходящий компилятор:

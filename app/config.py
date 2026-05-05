@@ -1,14 +1,15 @@
 # app/config.py
 from typing import ClassVar
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
 
 
 class Settings(BaseSettings):
     # === База данных ===
-    DB_USER: str
-    DB_PASSWORD: str
-    DB_NAME: str
-    DB_HOST: str
+    DB_USER: str = ""
+    DB_PASSWORD: str = ""
+    DB_NAME: str = ""
+    DB_HOST: str = ""
 
     # === Приложение ===
     APP_TITLE: str
@@ -35,6 +36,10 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self):
+        # Поддержка переменной окружения DATABASE_URL (для Docker)
+        if db_url := os.getenv("DATABASE_URL"):
+            return db_url
+        # Fallback на составленный URL из отдельных переменных
         return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:5432/{self.DB_NAME}"
 
     model_config = SettingsConfigDict(env_file=".env")
