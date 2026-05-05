@@ -241,7 +241,7 @@ async def check_update(
 
     company_slug = agent.company.slug
     filename = f"agent_universal_{active_build.build_slug}.exe"
-    filepath = os.path.join("builder", "dist", "agents", filename)
+    filepath = os.path.join("dist", "agents", filename)
 
     if not os.path.isfile(filepath):
         logger.error(f"Build file not found (check_update): {filepath}")
@@ -273,7 +273,7 @@ async def download_agent_build(
 
     filename = f"agent_universal_{build}.exe"
 
-    base_path = Path("builder") / "dist" / "agents"
+    base_path = Path("dist") / "agents"
     file_path = base_path / filename
 
     if not file_path.exists():

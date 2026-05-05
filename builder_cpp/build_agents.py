@@ -61,6 +61,9 @@ def sha256_file(path: Path) -> str:
 def build_exe(build_slug: str, server_url: str) -> Path:
     output_exe = DIST_DIR / f"agent_universal_{build_slug}.exe"
 
+    # Ensure output directory exists
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+
     print(f"[+] Building {output_exe.name}")
     print(f"[i] Using compiler: {GXX}")
     print(f"[i] Platform: {CURRENT_OS}")
@@ -69,8 +72,8 @@ def build_exe(build_slug: str, server_url: str) -> Path:
     cmd = [
         GXX,
         "-o", str(output_exe),
-        f'-DSERVER_URL=\\"{server_url}\\"',
-        f'-DBUILD_SLUG=\\"{build_slug}\\"',
+        f'-DSERVER_URL="{server_url}"',
+        f'-DBUILD_SLUG="{build_slug}"',
         str(CPP_ENTRYPOINT),
         "-lwinhttp",
         "-lws2_32",
@@ -83,6 +86,13 @@ def build_exe(build_slug: str, server_url: str) -> Path:
         print("[i] Using MinGW-w64 cross-compilation settings")
 
     print(f"[+] Running: {' '.join(cmd)}")
+    
+    # Remove existing file if it exists to avoid permission issues
+    if output_exe.exists():
+        try:
+            output_exe.unlink()
+        except PermissionError:
+            print(f"[!] Cannot delete existing file, trying to build anyway")
     
     # Windows native: use shell=True
     # Linux: use list directly without shell
