@@ -345,11 +345,11 @@ bool postJSON(const std::string& url, const std::string& bodyStr, std::string& r
     
     // Ignore SSL certificate errors for self-signed certs in dev
     if (url.find("https://") == 0) {
-        DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+        DWORD dwCertFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
                       SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
                       SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
                       SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
-        WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwFlags, sizeof(dwFlags));
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwCertFlags, sizeof(dwCertFlags));
     }
 
     std::wstring header = L"Content-Type: application/json\r\n";
@@ -587,12 +587,28 @@ void checkForUpdate(const std::string& uuid, const std::string& token) {
 
     logf("Download request path: %s", fullPath.c_str());
     std::wstring wpath(fullPath.begin(), fullPath.end());
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath.c_str(), NULL, NULL, NULL, 0);
+    
+    // Determine if HTTPS is needed
+    DWORD dwFlags = 0;
+    if (downloadUrl.find("https://") == 0) {
+        dwFlags |= WINHTTP_FLAG_SECURE;
+    }
+    
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath.c_str(), NULL, NULL, NULL, dwFlags);
     if (!hRequest) {
         logf("WinHttpOpenRequest (download) failed: %lu", GetLastError());
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return;
+    }
+
+    // Ignore SSL certificate errors for self-signed certs in dev
+    if (downloadUrl.find("https://") == 0) {
+        DWORD dwCertFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                          SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                          SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                          SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwCertFlags, sizeof(dwCertFlags));
     }
 
     if (!WinHttpSendRequest(hRequest, NULL, 0, NULL, 0, 0, 0)) {
