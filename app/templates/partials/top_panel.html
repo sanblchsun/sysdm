@@ -1,4 +1,34 @@
 <!-- app/templates/partials/top_panel.html -->
+<script>
+  // Функция для управления выбранными RDP агентами
+  window.toggleRdpAgent = function(agentId, checked, agentName) {
+    const data = localStorage.getItem('rdp_selected_agents');
+    const selected = data ? JSON.parse(data) : {};
+    
+    if (checked) {
+      selected[agentId] = agentName;
+    } else {
+      delete selected[agentId];
+    }
+    
+    localStorage.setItem('rdp_selected_agents', JSON.stringify(selected));
+    console.log('RDP selected agents:', selected);
+  }
+  
+  // Восстановить состояние чекбоксов при загрузке
+  window.addEventListener('DOMContentLoaded', function() {
+    const data = localStorage.getItem('rdp_selected_agents');
+    const selected = data ? JSON.parse(data) : {};
+    
+    document.querySelectorAll('.rdp-toggle').forEach(checkbox => {
+      const agentId = checkbox.dataset.agentId;
+      if (selected[agentId]) {
+        checkbox.checked = true;
+      }
+    });
+  });
+</script>
+
 {% if company %}
 <div class="company-ip-form">
   <form
@@ -82,3 +112,4 @@
   Department / Unassigned слева {% endif %}
 </div>
 {% endif %}
+  

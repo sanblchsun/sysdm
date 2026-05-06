@@ -166,6 +166,12 @@
     </div>
 
     <script>
+      // Загрузить список выбранных агентов из localStorage
+      function getSelectedAgents() {
+        const data = localStorage.getItem('rdp_selected_agents');
+        return data ? JSON.parse(data) : {};
+      }
+
       const cards = new Map();
 
       async function apiGet(u) {
@@ -260,7 +266,7 @@
             mjpeg_q: parseInt(sel("mjpeg_q").value, 10),
           };
           try {
-            await apiPost(`/agents/${encodeURIComponent(a.id)}/config`, body);
+            await apiPost(`/relay/agents/${encodeURIComponent(a.id)}/config`, body);
             btn.textContent = "✓ применено";
             btn.classList.add("ok");
           } catch (e) {
@@ -306,7 +312,7 @@
         const wantSrc =
           cur.codec === "h264"
             ? `__h264__`
-            : `/stream/mjpeg/${encodeURIComponent(a.id)}`;
+            : `/relay/stream/mjpeg/${encodeURIComponent(a.id)}`;
         if (c.lastSrc !== wantSrc) {
           if (cur.codec === "h264") {
             c.img.removeAttribute("src");
@@ -353,26 +359,31 @@
       async function refresh() {
         let data;
         try {
-          data = await apiGet("/agents");
+          data = await apiGet("/relay/agents");
         } catch {
           return;
         }
-        const grid = data.agents.length ? ensureGrid() : null;
-        const ids = new Set(data.agents.map((a) => a.id));
+        
+        // Фильтруем агентов по выбранным в таблице
+        const selected = getSelectedAgents();
+        const filteredAgents = data.agents.filter(a => selected[a.id]);
+        
+        const grid = filteredAgents.length ? ensureGrid() : null;
+        const ids = new Set(filteredAgents.map((a) => a.id));
         for (const [id, c] of cards) {
           if (!ids.has(id)) {
             c.el.remove();
             cards.delete(id);
           }
         }
-        if (!data.agents.length) {
+        if (!filteredAgents.length) {
           if (!document.getElementById("empty")) {
             document.getElementById("root").innerHTML =
-              '<div class="empty" id="empty">Нет подключённых агентов.</div>';
+              '<div class="empty" id="empty">Выберите агентов в таблице для просмотра (галочка RDP).</div>';
           }
           return;
         }
-        for (const a of data.agents) {
+        for (const a of filteredAgents) {
           let c = cards.get(a.id);
           if (!c) {
             c = makeCard(a);
