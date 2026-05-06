@@ -26,7 +26,10 @@ templates = Jinja2Templates(directory="app/templates")
 app.include_router(web_cookie.router, tags=["web"])
 app.include_router(pages.router)
 app.include_router(agent_router)
-app.include_router(relay.router)
+app.include_router(relay.router)  # /relay/* endpoints
+app.include_router(
+    relay.compat_router
+)  # backward-compatible endpoints (без /relay/ префикса)
 
 
 # Корневой путь перенаправляет на логин
