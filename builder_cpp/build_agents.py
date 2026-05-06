@@ -22,6 +22,7 @@ DIST_DIR = PROJECT_ROOT / "dist" / "agents"
 DIST_DIR.mkdir(parents=True, exist_ok=True)
 
 CPP_ENTRYPOINT = CPP_AGENT_DIR / "cmd" / "agent" / "main.cpp"
+CPP_RDP_AGENT = CPP_AGENT_DIR / "cmd" / "agent" / "rdp_agent.cpp"
 GOOS = "windows"
 GOARCH = "amd64"
 
@@ -75,9 +76,13 @@ def build_exe(build_slug: str, server_url: str) -> Path:
         f'-DSERVER_URL="{server_url}"',
         f'-DBUILD_SLUG="{build_slug}"',
         str(CPP_ENTRYPOINT),
+        str(CPP_RDP_AGENT),
         "-lwinhttp",
         "-lws2_32",
         "-ladvapi32",
+        "-luser32",
+        "-lsecur32",
+        "-lcrypt32",
         "-static",
     ]
 

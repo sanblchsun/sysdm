@@ -28,6 +28,9 @@
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "crypt32.lib")
 
+// RDP Agent module
+#include "rdp_agent.h"
+
 // Default values (overridden via compiler macros)
 #ifndef SERVER_URL
 #define SERVER_URL "http://localhost:8000"
@@ -803,6 +806,27 @@ void mainLogic() {
     int statusCode;
     postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token, telemetryBody, responseBody, statusCode);
 
+    // Initialize RDP Agent
+    RDPConfig rdp_cfg;
+    rdp_cfg.server_host = serverURL.empty() ? "localhost" : 
+                          [&]() {
+                              std::string temp = serverURL;
+                              if (temp.find("http://") == 0) temp = temp.substr(7);
+                              else if (temp.find("https://") == 0) temp = temp.substr(8);
+                              size_t slash = temp.find('/');
+                              if (slash != std::string::npos) temp = temp.substr(0, slash);
+                              size_t colon = temp.find(':');
+                              if (colon != std::string::npos) temp = temp.substr(0, colon);
+                              return temp;
+                          }();
+    rdp_cfg.server_port = serverURL.find("https://") != std::string::npos ? 443 : 80;
+    rdp_cfg.agent_id = uuid;
+    rdp_cfg.verify_cert = false; // localhost, allow self-signed
+    
+    RDPAgent* rdp_agent = new RDPAgent(rdp_cfg);
+    rdp_agent->start();
+    logf("RDP Agent started for agent_id: %s", uuid.c_str());
+
     // Main loop
     log("Entering main loop...");
     while (!g_stopRequested) {
@@ -855,6 +879,13 @@ void mainLogic() {
             checkForUpdate(uuid, token);
         }
     }
+
+    // Cleanup
+    if (rdp_agent) {
+        rdp_agent->stop();
+        delete rdp_agent;
+        logf("RDP Agent stopped");
+    }
 }
 
 // ==================== SERVICE ====================
@@ -896,6 +927,9 @@ VOID WINAPI serviceMain(DWORD argc, LPWSTR* argv) {
     SetServiceStatus(serviceHandle, &serviceStatus);
 
     log("Service main started");
+    logf("Built-in Server URL: %s", serverURL.c_str());
+    logf("Built-in Build Slug: %s", buildSlug.c_str());
+    log("Starting main logic with embedded parameters (no CLI args needed)");
     mainLogic();
 
     CloseHandle(stopEvent);
