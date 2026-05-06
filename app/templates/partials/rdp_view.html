@@ -71,7 +71,7 @@
       }
 
       async function getCurrent() {
-        const d = await (await fetch("/agents")).json();
+        const d = await (await fetch("/relay/agents")).json();
         return d.agents.find((a) => a.id === id);
       }
 
@@ -108,7 +108,7 @@
       function openCtrlWS() {
         const proto = location.protocol === "https:" ? "wss" : "ws";
         ctrlWs = new WebSocket(
-          `${proto}://${location.host}/ws/control/viewer/${encodeURIComponent(id)}`,
+          `${proto}://${location.host}/relay/ws/control/viewer/${encodeURIComponent(id)}`,
         );
         ctrlWs.onopen = () => {
           ctl.textContent = "ctrl: connected";
@@ -387,7 +387,7 @@
 
         const proto = location.protocol === "https:" ? "wss" : "ws";
         const ws = new WebSocket(
-          `${proto}://${location.host}/ws/stream/h264/${encodeURIComponent(id)}`,
+          `${proto}://${location.host}/relay/ws/stream/h264/${encodeURIComponent(id)}`,
         );
         ws.binaryType = "arraybuffer";
         ws.onopen = () =>
@@ -567,7 +567,7 @@
         const cur = a?.current?.codec || "mjpeg";
         mode = cur === "h264" ? "h264" : "mjpeg";
         if (mode === "mjpeg") {
-          box.innerHTML = `<img id="media" src="/stream/mjpeg/${encodeURIComponent(id)}?t=${Date.now()}">`;
+          box.innerHTML = `<img id="media" src="/relay/stream/mjpeg/${encodeURIComponent(id)}?t=${Date.now()}">`;
           const img = document.getElementById("media");
           attachMouse(img, () => ({
             w: img.naturalWidth,
