@@ -72,7 +72,8 @@ def build_exe(build_slug: str, server_url: str) -> Path:
     # Вшиваем параметры в исполняемый файл через макросы компилятора
     cmd = [
         GXX,
-        "-o", str(output_exe),
+        "-o",
+        str(output_exe),
         f'-DSERVER_URL="{server_url}"',
         f'-DBUILD_SLUG="{build_slug}"',
         str(CPP_ENTRYPOINT),
@@ -91,14 +92,14 @@ def build_exe(build_slug: str, server_url: str) -> Path:
         print("[i] Using MinGW-w64 cross-compilation settings")
 
     print(f"[+] Running: {' '.join(cmd)}")
-    
+
     # Remove existing file if it exists to avoid permission issues
     if output_exe.exists():
         try:
             output_exe.unlink()
         except PermissionError:
             print(f"[!] Cannot delete existing file, trying to build anyway")
-    
+
     # Windows native: use shell=True
     # Linux: use list directly without shell
     if CURRENT_OS == "Windows":
