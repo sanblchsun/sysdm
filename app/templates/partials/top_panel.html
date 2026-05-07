@@ -1,26 +1,41 @@
 <!-- app/templates/partials/top_panel.html -->
 <script>
+  // migrate: old numeric keys → drop
+  (function () {
+    try {
+      const raw = localStorage.getItem("rdp_selected_agents");
+      if (!raw) return;
+      const obj = JSON.parse(raw);
+      const keys = Object.keys(obj);
+      // UUID из модели — 36 символов с дефисами; старые ID — только цифры
+      const hasOldNumeric = keys.some((k) => /^\d+$/.test(k));
+      if (hasOldNumeric) localStorage.removeItem("rdp_selected_agents");
+    } catch {
+      localStorage.removeItem("rdp_selected_agents");
+    }
+  })();
+  
   // Функция для управления выбранными RDP агентами
-  window.toggleRdpAgent = function(agentId, checked, agentName) {
-    const data = localStorage.getItem('rdp_selected_agents');
+  window.toggleRdpAgent = function (agentId, checked, agentName) {
+    const data = localStorage.getItem("rdp_selected_agents");
     const selected = data ? JSON.parse(data) : {};
-    
+
     if (checked) {
       selected[agentId] = agentName;
     } else {
       delete selected[agentId];
     }
-    
-    localStorage.setItem('rdp_selected_agents', JSON.stringify(selected));
-    console.log('RDP selected agents:', selected);
-  }
-  
+
+    localStorage.setItem("rdp_selected_agents", JSON.stringify(selected));
+    console.log("RDP selected agents:", selected);
+  };
+
   // Восстановить состояние чекбоксов при загрузке
-  window.addEventListener('DOMContentLoaded', function() {
-    const data = localStorage.getItem('rdp_selected_agents');
+  window.addEventListener("DOMContentLoaded", function () {
+    const data = localStorage.getItem("rdp_selected_agents");
     const selected = data ? JSON.parse(data) : {};
-    
-    document.querySelectorAll('.rdp-toggle').forEach(checkbox => {
+
+    document.querySelectorAll(".rdp-toggle").forEach((checkbox) => {
       const agentId = checkbox.dataset.agentId;
       if (selected[agentId]) {
         checkbox.checked = true;
@@ -94,13 +109,17 @@
       <td>{{ agent.exe_version or "-" }}</td>
 
       <!-- RDP SELECTION -->
+      <!-- RDP SELECTION -->
       <td>
-        <input type="checkbox"
-               class="rdp-toggle"
-               data-agent-id="{{ agent.id }}"
-               data-agent-name="{{ agent.name_pc }}"
-               onchange="toggleRdpAgent('{{ agent.id }}', this.checked, '{{ agent.name_pc }}')"
+        {% if agent.uuid %}
+        <input
+          type="checkbox"
+          class="rdp-toggle"
+          data-agent-id="{{ agent.uuid }}"
+          data-agent-name="{{ agent.name_pc }}"
+          onchange="toggleRdpAgent('{{ agent.uuid }}', this.checked, '{{ agent.name_pc }}')"
         />
+        {% else %} — {% endif %}
       </td>
     </tr>
     {% endfor %}
@@ -112,4 +131,3 @@
   Department / Unassigned слева {% endif %}
 </div>
 {% endif %}
-  

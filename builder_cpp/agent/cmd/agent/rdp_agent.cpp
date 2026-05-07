@@ -3,6 +3,7 @@
 #include <wtsapi32.h>
 #include <userenv.h>
 #include <iostream>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -45,7 +46,6 @@ struct TlsConn
 // ============ RAW TCP HELPERS ============
 bool RDPAgent::send_all_raw(SOCKET s, const char *p, int n)
 {
-    log("ff_send_all_raw: sending " + std::to_string(n) + " bytes");
     while (n > 0)
     {
         int k = send(s, p, n, 0);
@@ -59,7 +59,6 @@ bool RDPAgent::send_all_raw(SOCKET s, const char *p, int n)
 
 int RDPAgent::recv_n_raw(SOCKET s, char *p, int n)
 {
-    log("ff_recv_n_raw: receiving " + std::to_string(n) + " bytes");
     int got = 0;
     while (got < n)
     {
@@ -103,7 +102,6 @@ static HANDLE GetActiveUserToken()
 
 SOCKET RDPAgent::tcp_connect(const std::string &host, int port)
 {
-    log("ff tcp_connect: connecting to " + host + ":" + std::to_string(port));
     addrinfo hints{}, *res = NULL;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -133,7 +131,6 @@ SOCKET RDPAgent::tcp_connect(const std::string &host, int port)
 // ============ TLS ============
 void RDPAgent::tls_close(TlsConn *c)
 {
-    log("ff_tls_close: closing TLS connection");
     if (!c)
         return;
     if (c->ctx_ok)
@@ -155,7 +152,6 @@ void RDPAgent::tls_close(TlsConn *c)
 
 bool RDPAgent::tls_handshake(TlsConn *c, const std::string &host, bool verify_cert)
 {
-    log("ff_tls_handshake: starting TLS handshake with " + host);
     SCHANNEL_CRED sc{};
     sc.dwVersion = SCHANNEL_CRED_VERSION;
     sc.dwFlags = SCH_CRED_NO_DEFAULT_CREDS;
@@ -286,7 +282,6 @@ bool RDPAgent::tls_handshake(TlsConn *c, const std::string &host, bool verify_ce
 
 TlsConn *RDPAgent::tls_connect(const std::string &host, int port, bool verify_cert)
 {
-    log("ff_tls_connect: connecting to " + host + ":" + std::to_string(port) + " with TLS");
     SOCKET s = tcp_connect(host, port);
     if (s == INVALID_SOCKET)
         return nullptr;
@@ -304,7 +299,6 @@ TlsConn *RDPAgent::tls_connect(const std::string &host, int port, bool verify_ce
 
 bool RDPAgent::tls_send_all(TlsConn *c, const char *p, int n)
 {
-    log("ff_tls_send_all: sending " + std::to_string(n) + " bytes over TLS");
     const int MAX_MSG = (int)c->sizes.cbMaximumMessage;
     while (n > 0)
     {
@@ -335,7 +329,6 @@ bool RDPAgent::tls_send_all(TlsConn *c, const char *p, int n)
 
 int RDPAgent::tls_recv_some(TlsConn *c, char *buf, int want)
 {
-    log("ff_tls_recv_some: receiving up to " + std::to_string(want) + " bytes over TLS");
     if (!c->plain.empty())
     {
         int n = (int)std::min((size_t)want, c->plain.size());
@@ -407,7 +400,6 @@ int RDPAgent::tls_recv_some(TlsConn *c, char *buf, int want)
 
 int RDPAgent::tls_recv_n(TlsConn *c, char *p, int n)
 {
-    log("ff_tls_recv_n: receiving " + std::to_string(n) + " bytes over TLS");
     int got = 0;
     while (got < n)
     {
@@ -423,7 +415,6 @@ int RDPAgent::tls_recv_n(TlsConn *c, char *p, int n)
 std::string RDPAgent::http_get(const std::string &host, int port,
                                const std::string &path, bool verify_cert)
 {
-    log("ff_http_get: performing HTTP GET to " + host + ":" + std::to_string(port) + path);
     TlsConn *c = tls_connect(host, port, verify_cert);
     if (!c)
         return {};
@@ -456,7 +447,6 @@ std::string RDPAgent::http_get(const std::string &host, int port,
 // ============ JSON HELPERS ============
 bool RDPAgent::json_str(const std::string &j, const std::string &k, std::string &out)
 {
-    log("ff_json_str: extracting string value for key '" + k + "' from JSON");
     std::string key = "\"" + k + "\"";
     auto p = j.find(key);
     if (p == std::string::npos)
@@ -479,7 +469,6 @@ bool RDPAgent::json_str(const std::string &j, const std::string &k, std::string 
 
 bool RDPAgent::json_int(const std::string &j, const std::string &k, int &out)
 {
-    log("ff_json_int: extracting integer value for key '" + k + "' from JSON");
     std::string key = "\"" + k + "\"";
     auto p = j.find(key);
     if (p == std::string::npos)
@@ -512,7 +501,6 @@ bool RDPAgent::json_int(const std::string &j, const std::string &k, int &out)
 
 bool RDPAgent::json_str_ex(const std::string &j, const std::string &k, std::string &out)
 {
-    log("ff_json_str_ex: extracting string value for key '" + k + "' from JSON with escape processing");
     std::string key = "\"" + k + "\"";
     auto p = j.find(key);
     if (p == std::string::npos)
@@ -657,7 +645,6 @@ bool RDPAgent::json_str_ex(const std::string &j, const std::string &k, std::stri
 
 std::string RDPAgent::json_escape(const std::string &s)
 {
-    log("ff_json_escape: escaping string for JSON");
     std::string out;
     out.reserve(s.size() + 2);
     out += '"';
@@ -705,7 +692,6 @@ std::string RDPAgent::json_escape(const std::string &s)
 // ============ WEBSOCKET ============
 std::string RDPAgent::b64(const unsigned char *d, size_t n)
 {
-    log("ff_b64: encoding data to Base64");
     static const char *T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string o;
     size_t i = 0;
@@ -725,7 +711,6 @@ std::string RDPAgent::b64(const unsigned char *d, size_t n)
 bool RDPAgent::ws_handshake(TlsConn *c, const std::string &host, int port,
                             const std::string &path)
 {
-    log("ff_ws_handshake: performing WebSocket handshake to " + host + ":" + std::to_string(port) + path);
     unsigned char k[16];
     std::random_device rd;
     for (int i = 0; i < 16; ++i)
@@ -754,7 +739,6 @@ bool RDPAgent::ws_handshake(TlsConn *c, const std::string &host, int port,
 
 bool RDPAgent::ws_send(TlsConn *c, int op, const void *data, size_t len)
 {
-    log("ff_ws_send: sending WebSocket frame with opcode " + std::to_string(op) + " and payload length " + std::to_string(len));
     std::vector<uint8_t> f;
     f.reserve(len + 14);
     f.push_back((uint8_t)(0x80 | op));
@@ -786,7 +770,6 @@ bool RDPAgent::ws_send(TlsConn *c, int op, const void *data, size_t len)
 
 int RDPAgent::ws_recv(TlsConn *c, std::vector<uint8_t> &payload)
 {
-    log("ff_ws_recv: receiving WebSocket frame");
     uint8_t h[2];
     if (tls_recv_n(c, (char *)h, 2) != 2)
         return -1;
@@ -839,7 +822,6 @@ int RDPAgent::ws_recv(TlsConn *c, std::vector<uint8_t> &payload)
 // ============ SCREEN METRICS ============
 bool RDPAgent::read_screen_metrics(int &w, int &h, int &ox, int &oy)
 {
-    log("ff_read_screen_metrics: reading screen metrics");
     w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
     ox = GetSystemMetrics(SM_XVIRTUALSCREEN);
@@ -856,7 +838,6 @@ bool RDPAgent::read_screen_metrics(int &w, int &h, int &ox, int &oy)
 
 void RDPAgent::init_screen_metrics()
 {
-    log("ff_init_screen_metrics: initializing screen metrics");
     int w, h, ox, oy;
     if (read_screen_metrics(w, h, ox, oy))
     {
@@ -873,7 +854,6 @@ void RDPAgent::init_screen_metrics()
 // ============ MOUSE INPUT ============
 void RDPAgent::do_mouse_move(int x, int y)
 {
-    log("ff_do_mouse_move: moving mouse to (" + std::to_string(x) + "," + std::to_string(y) + ")");
     int sw = g_screen_w.load(), sh = g_screen_h.load();
     if (sw <= 1 || sh <= 1)
         return;
@@ -895,7 +875,6 @@ void RDPAgent::do_mouse_move(int x, int y)
 
 void RDPAgent::do_mouse_button(int button, bool down)
 {
-    log("ff_do_mouse_button: " + std::string(down ? "pressing" : "releasing") + " mouse button " + std::to_string(button));
     INPUT in{};
     in.type = INPUT_MOUSE;
     DWORD f = 0;
@@ -919,7 +898,6 @@ void RDPAgent::do_mouse_button(int button, bool down)
 
 void RDPAgent::do_mouse_wheel(int delta)
 {
-    log("ff_do_mouse_wheel: scrolling mouse wheel with delta " + std::to_string(delta));
     INPUT in{};
     in.type = INPUT_MOUSE;
     in.mi.mouseData = (DWORD)delta;
@@ -930,7 +908,6 @@ void RDPAgent::do_mouse_wheel(int delta)
 // ============ KEYBOARD INPUT ============
 void RDPAgent::do_text_input(const std::string &utf8)
 {
-    log("ff_do_text_input: inputting text '" + utf8 + "'");
     if (utf8.empty())
         return;
     int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), NULL, 0);
@@ -990,7 +967,6 @@ void RDPAgent::do_text_input(const std::string &utf8)
 
 int RDPAgent::code_to_vk(const std::string &code)
 {
-    log("ff_code_to_vk: converting code '" + code + "' to virtual key code");
     if (code.size() == 4 && code.compare(0, 3, "Key") == 0)
     {
         char c = code[3];
@@ -1091,7 +1067,6 @@ int RDPAgent::code_to_vk(const std::string &code)
 
 void RDPAgent::do_key(const std::string &code, bool down)
 {
-    log("ff_do_key: " + std::string(down ? "pressing" : "releasing") + " key with code '" + code + "'");
     int vk = code_to_vk(code);
     if (vk == 0)
         return;
@@ -1128,7 +1103,6 @@ void RDPAgent::do_key(const std::string &code, bool down)
 // ============ CLIPBOARD ============
 std::string RDPAgent::clipboard_read_utf8()
 {
-    log("ff_clipboard_read_utf8: reading UTF-8 text from clipboard");
     bool opened = false;
     for (int i = 0; i < 10; ++i)
     {
@@ -1163,7 +1137,6 @@ std::string RDPAgent::clipboard_read_utf8()
 
 void RDPAgent::clipboard_write_utf8(const std::string &utf8)
 {
-    log("ff_clipboard_write_utf8: writing UTF-8 text to clipboard: '" + utf8 + "'");
     int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size() + 1, NULL, 0);
     if (wlen <= 0)
         return;
@@ -1203,7 +1176,6 @@ void RDPAgent::clipboard_write_utf8(const std::string &utf8)
 
 void RDPAgent::handle_control(const std::string &j)
 {
-    log("ff_handle_control: handling control message: " + j);
     std::string type;
     if (!json_str(j, "type", type))
         return;
@@ -1248,17 +1220,16 @@ void RDPAgent::handle_control(const std::string &j)
 // ============ FFMPEG ============
 std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &r)
 {
-    log("ff_build_ffmpeg_cmd: building ffmpeg command line");
     std::ostringstream c;
     c << "\"" << base.ffmpeg_path << "\" -hide_banner -loglevel warning"
       << " -f " << base.input_fmt;
 
     // Add gdigrab specific parameters for more reliable capture
-    if (base.input_fmt == "gdigrab")
-    {
-        c << " -offset_x 0 -offset_y 0"
-          << " -video_size " << g_screen_w.load() << "x" << g_screen_h.load();
-    }
+    // if (base.input_fmt == "gdigrab")
+    // {
+    //     c << " -offset_x 0 -offset_y 0"
+    //       << " -video_size " << g_screen_w.load() << "x" << g_screen_h.load();
+    // }
 
     c << " -framerate " << r.framerate
       << " -draw_mouse 1";
@@ -1318,8 +1289,6 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
 
 HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &pi)
 {
-    log("ff_start_ffmpeg: starting ffmpeg in user session: " + cmdline);
-
     SECURITY_ATTRIBUTES sa{sizeof(sa), NULL, TRUE};
     HANDLE rd = NULL, wr = NULL;
     HANDLE rd_err = NULL, wr_err = NULL;
@@ -1426,7 +1395,6 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
 // ============ CONTROL METHODS ============
 std::string RDPAgent::make_hello_json()
 {
-    log("ff_make_hello_json: creating hello JSON message");
     std::ostringstream hs;
     hs << "{\"type\":\"hello\""
        << ",\"screen_w\":" << g_screen_w.load()
@@ -1436,7 +1404,6 @@ std::string RDPAgent::make_hello_json()
 
 void RDPAgent::ctrl_send_hello()
 {
-    log("ff_ctrl_send_hello: sending hello message to control server");
     std::lock_guard<std::mutex> lk(runtime.ctrl_sock_m);
     if (!runtime.ctrl_conn)
         return;
@@ -1446,7 +1413,6 @@ void RDPAgent::ctrl_send_hello()
 
 void RDPAgent::ctrl_send_clipboard(const std::string &text)
 {
-    log("ff_ctrl_send_clipboard: sending clipboard text to control server: '" + text + "'");
     std::string msg = std::string("{\"type\":\"clipboard\",\"text\":") + json_escape(text) + "}";
     std::lock_guard<std::mutex> lk(runtime.ctrl_sock_m);
     if (!runtime.ctrl_conn)
@@ -1457,7 +1423,6 @@ void RDPAgent::ctrl_send_clipboard(const std::string &text)
 // ============ THREAD LOOPS ============
 void RDPAgent::control_loop()
 {
-    log("ff_control_loop: starting control loop");
     while (!runtime.stop)
     {
         TlsConn *c = tls_connect(config.server_host, config.server_port, config.verify_cert);
@@ -1509,7 +1474,6 @@ void RDPAgent::control_loop()
 
 void RDPAgent::poll_config_loop()
 {
-    log("ff_poll_config_loop: starting config poll loop");
     std::string last_sig;
     while (!runtime.stop)
     {
@@ -1565,7 +1529,6 @@ void RDPAgent::poll_config_loop()
 
 void RDPAgent::resolution_watch_loop()
 {
-    log("ff_resolution_watch_loop: starting resolution watch loop");
     using namespace std::chrono;
     while (!runtime.stop)
     {
@@ -1592,7 +1555,6 @@ void RDPAgent::resolution_watch_loop()
 
 void RDPAgent::clipboard_watch_loop()
 {
-    log("ff_clipboard_watch_loop: starting clipboard watch loop");
     {
         std::string cur = clipboard_read_utf8();
         std::lock_guard<std::mutex> lk(g_clip_m);
@@ -1625,7 +1587,6 @@ void RDPAgent::clipboard_watch_loop()
 
 void RDPAgent::run_session()
 {
-    log("ff_run_session: starting streaming session");
     TlsConn *c = tls_connect(config.server_host, config.server_port, config.verify_cert);
     if (!c)
     {
@@ -1695,7 +1656,6 @@ void RDPAgent::run_session()
         if (!ReadFile(pipe, buf.data(), (DWORD)buf.size(), &n, NULL))
         {
             DWORD err = GetLastError();
-            logf("ReadFile failed: err=%lu", err);
             // Проверяем жив ли процесс FFmpeg
             DWORD exitCode = 0;
             if (GetExitCodeProcess(pi.hProcess, &exitCode))
@@ -1715,16 +1675,18 @@ void RDPAgent::run_session()
                 logf("FFmpeg exit code: %lu (0x%08lx)", exitCode, exitCode);
             break;
         }
-        // Простая чанковая отправка
-        std::string chunk_header = std::to_string((long long)n);
-        if (!tls_send_all(c, (chunk_header + "\r\n").c_str(), (int)(chunk_header.size() + 2)))
+
+        // HTTP/1.1 chunked: size В ШЕСТНАДЦАТЕРИЧНОЙ, CRLF, data, CRLF
+        char chdr[32];
+        int chdr_len = std::snprintf(chdr, sizeof chdr, "%X\r\n", (unsigned)n);
+        if (!tls_send_all(c, chdr, chdr_len))
         {
             log("send header failed");
             break;
         }
-        if (!tls_send_all(c, buf.data(), (int)n))
+        if (n > 0 && !tls_send_all(c, buf.data(), (int)n))
         {
-            log("send failed");
+            log("send body failed");
             break;
         }
         if (!tls_send_all(c, "\r\n", 2))
@@ -1732,6 +1694,7 @@ void RDPAgent::run_session()
             log("send trailer failed");
             break;
         }
+
         bytes += n;
         auto now = std::chrono::steady_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
@@ -1755,7 +1718,6 @@ void RDPAgent::run_session()
 // ============ CLASS LIFECYCLE ============
 RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
 {
-    log("ff_rdp_agent_constructor: constructing RDPAgent with agent_id=" + config.agent_id);
     runtime.codec = config.codec;
     runtime.encoder = config.encoder;
     runtime.bitrate = config.bitrate;
@@ -1767,7 +1729,6 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
 
 RDPAgent::~RDPAgent()
 {
-    log("ff_rdp_agent_destructor: destroying RDPAgent with agent_id=" + config.agent_id);
     stop();
 }
 
@@ -1848,7 +1809,6 @@ void RDPAgent::start()
 
 void RDPAgent::stop()
 {
-    log("ff_stop: stopping RDPAgent with agent_id=" + config.agent_id);
     if (!running)
         return;
 
@@ -1870,13 +1830,11 @@ void RDPAgent::stop()
 
 bool RDPAgent::isRunning() const
 {
-    log("ff_is_running: checking if RDPAgent with agent_id=" + config.agent_id + " is running: " + (running ? "true" : "false"));
     return running;
 }
 
 RDPAgent::Status RDPAgent::getStatus() const
 {
-    log("ff_get_status: getting status of RDPAgent with agent_id=" + config.agent_id);
     Status st;
     st.screen_w = g_screen_w.load();
     st.screen_h = g_screen_h.load();

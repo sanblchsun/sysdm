@@ -168,7 +168,7 @@
     <script>
       // Загрузить список выбранных агентов из localStorage
       function getSelectedAgents() {
-        const data = localStorage.getItem('rdp_selected_agents');
+        const data = localStorage.getItem("rdp_selected_agents");
         return data ? JSON.parse(data) : {};
       }
 
@@ -266,7 +266,10 @@
             mjpeg_q: parseInt(sel("mjpeg_q").value, 10),
           };
           try {
-            await apiPost(`/relay/agents/${encodeURIComponent(a.id)}/config`, body);
+            await apiPost(
+              `/relay/agents/${encodeURIComponent(a.id)}/config`,
+              body,
+            );
             btn.textContent = "✓ применено";
             btn.classList.add("ok");
           } catch (e) {
@@ -307,7 +310,7 @@
           (cur.codec || "?") +
           (cur.encoder ? "/" + cur.encoder : "") +
           (a.ctrl_connected ? " 🖱" : "");
-        c.link.href = `/templates/partials/rdp_view.html?id=${encodeURIComponent(a.id)}`;
+        c.link.href = `/rdp/viewer?id=${encodeURIComponent(a.id)}`;
 
         const wantSrc =
           cur.codec === "h264"
@@ -363,11 +366,11 @@
         } catch {
           return;
         }
-        
+
         // Фильтруем агентов по выбранным в таблице
         const selected = getSelectedAgents();
-        const filteredAgents = data.agents.filter(a => selected[a.id]);
-        
+        const filteredAgents = data.agents.filter((a) => selected[a.id]);
+
         const grid = filteredAgents.length ? ensureGrid() : null;
         const ids = new Set(filteredAgents.map((a) => a.id));
         for (const [id, c] of cards) {

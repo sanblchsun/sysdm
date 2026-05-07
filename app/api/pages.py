@@ -74,6 +74,7 @@ async def top_panel(
     stmt = (
         select(
             Agent.id,
+            Agent.uuid,
             Agent.name_pc,
             Agent.last_seen,
             Agent.exe_version,
@@ -110,6 +111,7 @@ async def top_panel(
         agents.append(
             {
                 "id": row.id,
+                "uuid": row.uuid,
                 "name_pc": row.name_pc,
                 "system": row.system,
                 "user_name": row.user_name,
