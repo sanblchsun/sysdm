@@ -4,9 +4,10 @@
 
 #define WIN32_LEAN_AND_MEAN
 #define SECURITY_WIN32
-#include <windows.h>
+#define NOMINMAX
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #include <security.h>
 #include <schannel.h>
 #include <string>
@@ -53,7 +54,7 @@ struct RDPRuntime
     std::atomic<bool> stop{false};
 
     std::mutex ctrl_sock_m;
-    struct TlsConn* ctrl_conn = nullptr;
+    struct TlsConn *ctrl_conn = nullptr;
 };
 
 struct TlsConn;
@@ -63,7 +64,7 @@ struct TlsConn;
 class RDPAgent
 {
 public:
-    RDPAgent(const RDPConfig& config);
+    RDPAgent(const RDPConfig &config);
     ~RDPAgent();
 
     // Lifecycle
@@ -90,55 +91,55 @@ private:
     bool running = false;
 
     // ========== TLS ==========
-    static TlsConn* tls_connect(const std::string& host, int port, bool verify_cert);
-    static void tls_close(TlsConn* c);
-    static bool tls_handshake(TlsConn* c, const std::string& host, bool verify_cert);
-    static bool tls_send_all(TlsConn* c, const char* p, int n);
-    static int tls_recv_some(TlsConn* c, char* buf, int want);
-    static int tls_recv_n(TlsConn* c, char* p, int n);
+    static TlsConn *tls_connect(const std::string &host, int port, bool verify_cert);
+    static void tls_close(TlsConn *c);
+    static bool tls_handshake(TlsConn *c, const std::string &host, bool verify_cert);
+    static bool tls_send_all(TlsConn *c, const char *p, int n);
+    static int tls_recv_some(TlsConn *c, char *buf, int want);
+    static int tls_recv_n(TlsConn *c, char *p, int n);
 
     // ========== Raw TCP ==========
-    static bool send_all_raw(SOCKET s, const char* p, int n);
-    static int recv_n_raw(SOCKET s, char* p, int n);
-    static SOCKET tcp_connect(const std::string& host, int port);
+    static bool send_all_raw(SOCKET s, const char *p, int n);
+    static int recv_n_raw(SOCKET s, char *p, int n);
+    static SOCKET tcp_connect(const std::string &host, int port);
 
     // ========== WebSocket ==========
-    static bool ws_handshake(TlsConn* c, const std::string& host, int port, const std::string& path);
-    static bool ws_send(TlsConn* c, int op, const void* data, size_t len);
-    static int ws_recv(TlsConn* c, std::vector<uint8_t>& payload);
-    static std::string b64(const unsigned char* d, size_t n);
+    static bool ws_handshake(TlsConn *c, const std::string &host, int port, const std::string &path);
+    static bool ws_send(TlsConn *c, int op, const void *data, size_t len);
+    static int ws_recv(TlsConn *c, std::vector<uint8_t> &payload);
+    static std::string b64(const unsigned char *d, size_t n);
 
     // ========== HTTP ==========
-    static std::string http_get(const std::string& host, int port, const std::string& path, bool verify_cert);
+    static std::string http_get(const std::string &host, int port, const std::string &path, bool verify_cert);
 
     // ========== JSON ==========
-    static bool json_str(const std::string& j, const std::string& k, std::string& out);
-    static bool json_int(const std::string& j, const std::string& k, int& out);
-    static bool json_str_ex(const std::string& j, const std::string& k, std::string& out);
-    static std::string json_escape(const std::string& s);
+    static bool json_str(const std::string &j, const std::string &k, std::string &out);
+    static bool json_int(const std::string &j, const std::string &k, int &out);
+    static bool json_str_ex(const std::string &j, const std::string &k, std::string &out);
+    static std::string json_escape(const std::string &s);
 
     // ========== INPUT HANDLERS ==========
     static void do_mouse_move(int x, int y);
     static void do_mouse_button(int button, bool down);
     static void do_mouse_wheel(int delta);
-    static void do_text_input(const std::string& utf8);
-    static int code_to_vk(const std::string& code);
-    static void do_key(const std::string& code, bool down);
+    static void do_text_input(const std::string &utf8);
+    static int code_to_vk(const std::string &code);
+    static void do_key(const std::string &code, bool down);
     static std::string clipboard_read_utf8();
-    static void clipboard_write_utf8(const std::string& utf8);
-    static void handle_control(const std::string& j);
+    static void clipboard_write_utf8(const std::string &utf8);
+    static void handle_control(const std::string &j);
 
     // ========== SCREEN METRICS ==========
-    static bool read_screen_metrics(int& w, int& h, int& ox, int& oy);
+    static bool read_screen_metrics(int &w, int &h, int &ox, int &oy);
     static void init_screen_metrics();
 
     // ========== FFMPEG ==========
-    static std::string build_ffmpeg_cmd(const RDPConfig& base, const RDPRuntime& r);
-    static HANDLE start_ffmpeg(const std::string& cmdline, PROCESS_INFORMATION& pi);
+    static std::string build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &r);
+    static HANDLE start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &pi);
 
     // ========== CONTROL ==========
     void ctrl_send_hello();
-    void ctrl_send_clipboard(const std::string& text);
+    void ctrl_send_clipboard(const std::string &text);
     static std::string make_hello_json();
 
     // ========== LOOP THREADS ==========

@@ -1,5 +1,7 @@
 // builder_cpp/agent/cmd/agent/rdp_agent.cpp - Рефакторенный код из rmm_cpp/agent/main.cpp
 #include "rdp_agent.h"
+#include <wtsapi32.h>
+#include <userenv.h>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -11,6 +13,8 @@
 #include <cstdarg>
 #include <unordered_map>
 
+#pragma comment(lib, "wtsapi32.lib")
+#pragma comment(lib, "userenv.lib")
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "Secur32.lib")
 #pragma comment(lib, "user32.lib")
@@ -65,6 +69,36 @@ int RDPAgent::recv_n_raw(SOCKET s, char *p, int n)
         got += k;
     }
     return got;
+}
+
+static HANDLE GetActiveUserToken()
+{
+    DWORD sessionId = WTSGetActiveConsoleSessionId();
+    if (sessionId == 0xFFFFFFFF)
+    {
+        log("No active console session");
+        return NULL;
+    }
+    logf("Active console session id=%lu", sessionId);
+
+    HANDLE hUserToken = NULL;
+    if (!WTSQueryUserToken(sessionId, &hUserToken))
+    {
+        DWORD err = GetLastError();
+        logf("WTSQueryUserToken failed: %lu (no user logged in?)", err);
+        return NULL;
+    }
+
+    HANDLE hPrimary = NULL;
+    if (!DuplicateTokenEx(hUserToken, MAXIMUM_ALLOWED, NULL,
+                          SecurityImpersonation, TokenPrimary, &hPrimary))
+    {
+        logf("DuplicateTokenEx failed: %lu", GetLastError());
+        CloseHandle(hUserToken);
+        return NULL;
+    }
+    CloseHandle(hUserToken);
+    return hPrimary;
 }
 
 SOCKET RDPAgent::tcp_connect(const std::string &host, int port)
@@ -1217,12 +1251,21 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
     log("ff_build_ffmpeg_cmd: building ffmpeg command line");
     std::ostringstream c;
     c << "\"" << base.ffmpeg_path << "\" -hide_banner -loglevel warning"
-      << " -f " << base.input_fmt
-      << " -framerate " << r.framerate
+      << " -f " << base.input_fmt;
+
+    // Add gdigrab specific parameters for more reliable capture
+    if (base.input_fmt == "gdigrab")
+    {
+        c << " -offset_x 0 -offset_y 0"
+          << " -video_size " << g_screen_w.load() << "x" << g_screen_h.load();
+    }
+
+    c << " -framerate " << r.framerate
       << " -draw_mouse 1";
-    if (!base.video_size.empty())
+    if (!base.video_size.empty() && base.input_fmt != "gdigrab")
         c << " -video_size " << base.video_size;
     c << " -i " << base.input;
+
     if (r.codec == "mjpeg")
     {
         c << " -f mjpeg -q:v " << r.mjpeg_q << " -pix_fmt yuvj420p pipe:1";
@@ -1275,38 +1318,108 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
 
 HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &pi)
 {
-    log("ff_start_ffmpeg: starting ffmpeg with command line: " + cmdline);
+    log("ff_start_ffmpeg: starting ffmpeg in user session: " + cmdline);
+
     SECURITY_ATTRIBUTES sa{sizeof(sa), NULL, TRUE};
     HANDLE rd = NULL, wr = NULL;
+    HANDLE rd_err = NULL, wr_err = NULL;
+
     if (!CreatePipe(&rd, &wr, &sa, 4 * 1024 * 1024))
     {
-        log("CreatePipe failed");
+        log("CreatePipe (stdout) failed");
         return NULL;
     }
     SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
-    STARTUPINFOA si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = wr;
-    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    std::vector<char> buf(cmdline.begin(), cmdline.end());
-    buf.push_back(0);
-    log("launching: " + cmdline);
-    if (!CreateProcessA(NULL, buf.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
+
+    if (!CreatePipe(&rd_err, &wr_err, &sa, 1024 * 1024))
     {
-        DWORD err = GetLastError();
-        logf("CreateProcess failed, err=%lu (0x%lx)", err, err);
-        // Некоторые коды ошибок:
-        // 2 = FILE_NOT_FOUND (ffmpeg.exe не найден)
-        // 5 = ACCESS_DENIED
-        // 193 = %1 is not a valid Win32 application
+        log("CreatePipe (stderr) failed");
         CloseHandle(rd);
         CloseHandle(wr);
         return NULL;
     }
+    SetHandleInformation(rd_err, HANDLE_FLAG_INHERIT, 0);
+
+    // Получаем токен активного пользователя
+    HANDLE hUserToken = GetActiveUserToken();
+    if (!hUserToken)
+    {
+        log("No user token - cannot start ffmpeg (user not logged in?)");
+        CloseHandle(rd);
+        CloseHandle(wr);
+        CloseHandle(rd_err);
+        CloseHandle(wr_err);
+        return NULL;
+    }
+
+    // Окружение пользователя
+    LPVOID envBlock = NULL;
+    if (!CreateEnvironmentBlock(&envBlock, hUserToken, FALSE))
+    {
+        logf("CreateEnvironmentBlock failed: %lu", GetLastError());
+        envBlock = NULL;
+    }
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = wr;
+    si.hStdError = wr_err;
+    si.hStdInput = NULL;
+    si.lpDesktop = (LPSTR) "winsta0\\default"; // КРИТИЧНО
+
+    std::vector<char> buf(cmdline.begin(), cmdline.end());
+    buf.push_back(0);
+
+    DWORD creationFlags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+
+    BOOL ok = CreateProcessAsUserA(
+        hUserToken,
+        NULL,
+        buf.data(),
+        NULL, NULL,
+        TRUE, // bInheritHandles - чтобы пайпы прошли в дочерний процесс
+        creationFlags,
+        envBlock,
+        NULL, // lpCurrentDirectory (можно указать папку ffmpeg)
+        &si, &pi);
+
+    DWORD err = ok ? 0 : GetLastError();
+
+    if (envBlock)
+        DestroyEnvironmentBlock(envBlock);
+    CloseHandle(hUserToken);
+
+    if (!ok)
+    {
+        logf("CreateProcessAsUser failed, err=%lu (0x%lx)", err, err);
+        CloseHandle(rd);
+        CloseHandle(wr);
+        CloseHandle(rd_err);
+        CloseHandle(wr_err);
+        return NULL;
+    }
+
     CloseHandle(wr);
-    logf("FFmpeg process created: PID=%lu", pi.dwProcessId);
+    CloseHandle(wr_err);
+
+    logf("FFmpeg started in user session: PID=%lu", pi.dwProcessId);
+
+    std::thread([rd_err]()
+                {
+        std::vector<char> b(4096);
+        DWORD n = 0;
+        while (ReadFile(rd_err, b.data(), (DWORD)b.size() - 1, &n, NULL) && n > 0) {
+            b[n] = 0;
+            std::string line(b.data(), n);
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+                line.pop_back();
+            if (!line.empty()) log("[ffmpeg stderr] " + line);
+        }
+        CloseHandle(rd_err); })
+        .detach();
+
     return rd;
 }
 
@@ -1564,7 +1677,8 @@ void RDPAgent::run_session()
     {
         tls_close(c);
         delete c;
-        return;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        return; // цикл в start() перезапустит run_session
     }
 
     std::vector<char> buf(64 * 1024);
@@ -1589,7 +1703,7 @@ void RDPAgent::run_session()
                 if (exitCode == STILL_ACTIVE)
                     logf("FFmpeg process still running but pipe read failed");
                 else
-                    logf("FFmpeg process exited with code %lu", exitCode);
+                    logf("FFmpeg process exited with code %lu (0x%08lx)", exitCode, exitCode);
             }
             break;
         }
@@ -1598,7 +1712,7 @@ void RDPAgent::run_session()
             log("ffmpeg pipe closed - no data");
             DWORD exitCode = 0;
             if (GetExitCodeProcess(pi.hProcess, &exitCode))
-                logf("FFmpeg exit code: %lu", exitCode);
+                logf("FFmpeg exit code: %lu (0x%08lx)", exitCode, exitCode);
             break;
         }
         // Простая чанковая отправка
@@ -1662,7 +1776,7 @@ void RDPAgent::start()
     try
     {
         logf("[RDPAgent::start] [1] Entering start()");
-        
+
         if (running)
         {
             logf("[RDPAgent::start] Already running, returning");
@@ -1686,33 +1800,29 @@ void RDPAgent::start()
         // Создаём потоки
         logf("[RDPAgent::start] [5] Creating threads...");
         threads.emplace_back([this]()
-        {
+                             {
             logf("[RDPAgent::start] [THREAD] control_loop starting");
             control_loop();
-            logf("[RDPAgent::start] [THREAD] control_loop ended");
-        });
+            logf("[RDPAgent::start] [THREAD] control_loop ended"); });
         threads.emplace_back([this]()
-        {
+                             {
             logf("[RDPAgent::start] [THREAD] poll_config_loop starting");
             poll_config_loop();
-            logf("[RDPAgent::start] [THREAD] poll_config_loop ended");
-        });
+            logf("[RDPAgent::start] [THREAD] poll_config_loop ended"); });
         threads.emplace_back([this]()
-        {
+                             {
             logf("[RDPAgent::start] [THREAD] resolution_watch_loop starting");
             resolution_watch_loop();
-            logf("[RDPAgent::start] [THREAD] resolution_watch_loop ended");
-        });
+            logf("[RDPAgent::start] [THREAD] resolution_watch_loop ended"); });
         threads.emplace_back([this]()
-        {
+                             {
             logf("[RDPAgent::start] [THREAD] clipboard_watch_loop starting");
             clipboard_watch_loop();
-            logf("[RDPAgent::start] [THREAD] clipboard_watch_loop ended");
-        });
+            logf("[RDPAgent::start] [THREAD] clipboard_watch_loop ended"); });
 
         // Основной поток стриминга
         threads.emplace_back([this]()
-        {
+                             {
             logf("[RDPAgent::start] [THREAD] stream_session starting");
             while (!runtime.stop)
             {
@@ -1720,14 +1830,13 @@ void RDPAgent::start()
                 if (!runtime.stop)
                     std::this_thread::sleep_for(std::chrono::seconds(2));
             }
-            logf("[RDPAgent::start] [THREAD] stream_session ended");
-        });
+            logf("[RDPAgent::start] [THREAD] stream_session ended"); });
 
         logf("[RDPAgent::start] [6] All threads created");
         running = true;
         logf("[RDPAgent::start] [7] RDPAgent started successfully, running=true");
     }
-    catch (const std::exception& e)
+    catch (const std::exception &e)
     {
         logf("[RDPAgent::start] [ERROR] Exception: %s", e.what());
     }
