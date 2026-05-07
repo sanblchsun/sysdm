@@ -1280,7 +1280,7 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
     HANDLE rd = NULL, wr = NULL;
     if (!CreatePipe(&rd, &wr, &sa, 4 * 1024 * 1024))
     {
-        logf("CreatePipe failed: err=%lu", GetLastError());
+        log("CreatePipe failed");
         return NULL;
     }
     SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
