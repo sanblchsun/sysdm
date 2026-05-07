@@ -1,3 +1,4 @@
+// builder_cpp/agent/cmd/agent/rdp_agent.h
 #ifndef RDP_AGENT_H
 #define RDP_AGENT_H
 
@@ -14,6 +15,11 @@
 #include <atomic>
 #include <thread>
 #include <memory>
+
+// ============ LOGGING ============
+extern void log(const char *msg);
+extern void log(const std::string &msg);
+extern void logf(const char *fmt, ...);
 
 // ============ INTERNAL STRUCTURES ============
 
@@ -141,10 +147,6 @@ private:
     void resolution_watch_loop();
     void clipboard_watch_loop();
     void run_session();
-
-    // ========== LOGGING ==========
-    static void log(const std::string& s);
-    static void logf(const char* fmt, ...);
 
     // ========== GLOBALS (static for access) ==========
     static std::atomic<int> g_screen_w;

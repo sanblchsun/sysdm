@@ -1,3 +1,4 @@
+// builder_cpp/agent/cmd/agent/main.cpp
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winhttp.h>
@@ -121,6 +122,12 @@ std::string getExeDir()
     return (pos != std::string::npos) ? exePath.substr(0, pos) : exePath;
 }
 
+std::string getFFmpegPath()
+{
+    std::string exeDir = getExeDir();
+    return exeDir + "\\ffmpeg.exe";
+}
+
 void setupFileLogger()
 {
     std::string exeDir = getExeDir();
@@ -154,6 +161,12 @@ void logf(const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     log(buf);
+}
+
+// Overload для std::string
+void log(const std::string &msg)
+{
+    log(msg.c_str());
 }
 
 // ==================== MACHINE UID ====================
@@ -969,11 +982,14 @@ void mainLogic()
     rdp_cfg.server_port = serverURL.find("https://") != std::string::npos ? 443 : 80;
     rdp_cfg.agent_id = uuid;
     rdp_cfg.verify_cert = false; // localhost, allow self-signed
+    rdp_cfg.ffmpeg_path = getFFmpegPath();
 
     RDPAgent *rdp_agent = new RDPAgent(rdp_cfg);
     log("Starting RDP Agent...");
     rdp_agent->start();
     logf("RDP Agent started for agent_id: %s", uuid.c_str());
+    std::cout.flush();
+    if (logFile.is_open()) logFile.flush();
 
     // Main loop
     log("Entering main loop...");

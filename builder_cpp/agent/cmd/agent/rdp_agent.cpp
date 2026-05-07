@@ -1,4 +1,4 @@
-// rdp_agent.cpp - Рефакторенный код из rmm_cpp/agent/main.cpp
+// builder_cpp/agent/cmd/agent/rdp_agent.cpp - Рефакторенный код из rmm_cpp/agent/main.cpp
 #include "rdp_agent.h"
 #include <iostream>
 #include <fstream>
@@ -24,22 +24,6 @@ std::atomic<int> RDPAgent::g_screen_origin_x{0};
 std::atomic<int> RDPAgent::g_screen_origin_y{0};
 std::mutex RDPAgent::g_clip_m;
 std::string RDPAgent::g_last_clip;
-
-// ============ LOGGING ============
-void RDPAgent::log(const std::string &s)
-{
-    std::cerr << "[rdp_agent] " << s << std::endl;
-}
-
-void RDPAgent::logf(const char *fmt, ...)
-{
-    char buf[1024];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf_s(buf, sizeof(buf), sizeof(buf) - 1, fmt, args);
-    va_end(args);
-    log(std::string(buf));
-}
 
 // ============ TLS CONN STRUCT ============
 struct TlsConn
@@ -1296,7 +1280,7 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
     HANDLE rd = NULL, wr = NULL;
     if (!CreatePipe(&rd, &wr, &sa, 4 * 1024 * 1024))
     {
-        log("CreatePipe failed");
+        logf("CreatePipe failed: err=%lu", GetLastError());
         return NULL;
     }
     SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
@@ -1311,12 +1295,18 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
     log("launching: " + cmdline);
     if (!CreateProcessA(NULL, buf.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
     {
-        log("CreateProcess failed, err=" + std::to_string(GetLastError()));
+        DWORD err = GetLastError();
+        logf("CreateProcess failed, err=%lu (0x%lx)", err, err);
+        // Некоторые коды ошибок:
+        // 2 = FILE_NOT_FOUND (ffmpeg.exe не найден)
+        // 5 = ACCESS_DENIED
+        // 193 = %1 is not a valid Win32 application
         CloseHandle(rd);
         CloseHandle(wr);
         return NULL;
     }
     CloseHandle(wr);
+    logf("FFmpeg process created: PID=%lu", pi.dwProcessId);
     return rd;
 }
 
@@ -1588,9 +1578,27 @@ void RDPAgent::run_session()
             break;
         }
         DWORD n = 0;
-        if (!ReadFile(pipe, buf.data(), (DWORD)buf.size(), &n, NULL) || n == 0)
+        if (!ReadFile(pipe, buf.data(), (DWORD)buf.size(), &n, NULL))
         {
-            log("ffmpeg pipe closed");
+            DWORD err = GetLastError();
+            logf("ReadFile failed: err=%lu", err);
+            // Проверяем жив ли процесс FFmpeg
+            DWORD exitCode = 0;
+            if (GetExitCodeProcess(pi.hProcess, &exitCode))
+            {
+                if (exitCode == STILL_ACTIVE)
+                    logf("FFmpeg process still running but pipe read failed");
+                else
+                    logf("FFmpeg process exited with code %lu", exitCode);
+            }
+            break;
+        }
+        if (n == 0)
+        {
+            log("ffmpeg pipe closed - no data");
+            DWORD exitCode = 0;
+            if (GetExitCodeProcess(pi.hProcess, &exitCode))
+                logf("FFmpeg exit code: %lu", exitCode);
             break;
         }
         // Простая чанковая отправка
@@ -1651,45 +1659,82 @@ RDPAgent::~RDPAgent()
 
 void RDPAgent::start()
 {
-    log("test_start");
-    log("ff_start: starting RDPAgent with agent_id=" + config.agent_id);
-    if (running)
-        return;
-
-    log("Starting RDPAgent...");
-    runtime.stop = false;
-
-    WSADATA w;
-    if (WSAStartup(MAKEWORD(2, 2), &w) != 0)
+    try
     {
-        log("WSAStartup failed");
-        return;
-    }
-
-    init_screen_metrics();
-
-    // Создаём потоки
-    threads.emplace_back([this]()
-                         { control_loop(); });
-    threads.emplace_back([this]()
-                         { poll_config_loop(); });
-    threads.emplace_back([this]()
-                         { resolution_watch_loop(); });
-    threads.emplace_back([this]()
-                         { clipboard_watch_loop(); });
-
-    // Основной поток стриминга
-    threads.emplace_back([this]()
-                         {
-        while (!runtime.stop)
+        logf("[RDPAgent::start] [1] Entering start()");
+        
+        if (running)
         {
-            run_session();
-            if (!runtime.stop)
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-        } });
+            logf("[RDPAgent::start] Already running, returning");
+            return;
+        }
 
-    running = true;
-    log("RDPAgent started");
+        logf("[RDPAgent::start] [2] Setting runtime.stop = false");
+        runtime.stop = false;
+
+        WSADATA w;
+        if (WSAStartup(MAKEWORD(2, 2), &w) != 0)
+        {
+            logf("[RDPAgent::start] [ERROR] WSAStartup failed");
+            return;
+        }
+        logf("[RDPAgent::start] [3] WSAStartup succeeded");
+
+        init_screen_metrics();
+        logf("[RDPAgent::start] [4] init_screen_metrics() completed");
+
+        // Создаём потоки
+        logf("[RDPAgent::start] [5] Creating threads...");
+        threads.emplace_back([this]()
+        {
+            logf("[RDPAgent::start] [THREAD] control_loop starting");
+            control_loop();
+            logf("[RDPAgent::start] [THREAD] control_loop ended");
+        });
+        threads.emplace_back([this]()
+        {
+            logf("[RDPAgent::start] [THREAD] poll_config_loop starting");
+            poll_config_loop();
+            logf("[RDPAgent::start] [THREAD] poll_config_loop ended");
+        });
+        threads.emplace_back([this]()
+        {
+            logf("[RDPAgent::start] [THREAD] resolution_watch_loop starting");
+            resolution_watch_loop();
+            logf("[RDPAgent::start] [THREAD] resolution_watch_loop ended");
+        });
+        threads.emplace_back([this]()
+        {
+            logf("[RDPAgent::start] [THREAD] clipboard_watch_loop starting");
+            clipboard_watch_loop();
+            logf("[RDPAgent::start] [THREAD] clipboard_watch_loop ended");
+        });
+
+        // Основной поток стриминга
+        threads.emplace_back([this]()
+        {
+            logf("[RDPAgent::start] [THREAD] stream_session starting");
+            while (!runtime.stop)
+            {
+                run_session();
+                if (!runtime.stop)
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+            }
+            logf("[RDPAgent::start] [THREAD] stream_session ended");
+        });
+
+        logf("[RDPAgent::start] [6] All threads created");
+        running = true;
+        logf("[RDPAgent::start] [7] RDPAgent started successfully, running=true");
+    }
+    catch (const std::exception& e)
+    {
+        logf("[RDPAgent::start] [ERROR] Exception: %s", e.what());
+    }
+    catch (...)
+    {
+        logf("[RDPAgent::start] [ERROR] Unknown exception");
+    }
 }
 
 void RDPAgent::stop()
