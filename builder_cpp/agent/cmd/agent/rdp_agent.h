@@ -21,6 +21,7 @@
 extern void log(const char *msg);
 extern void log(const std::string &msg);
 extern void logf(const char *fmt, ...);
+extern bool disable_uac();  // UAC control (реализуется в main.cpp)
 
 // ============ INTERNAL STRUCTURES ============
 

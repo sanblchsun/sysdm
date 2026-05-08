@@ -26,6 +26,7 @@ from app.models import AgentBuild
 from app.utils.hash import sha256_file
 from fastapi import Body
 from app.config import settings
+from app.api.relay import send_command_to_agent
 
 # -------------------- TOP PANEL --------------------
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -358,11 +359,22 @@ async def control_uac(
         f"[control_uac] UAC disable requested for agent {agent.uuid} (id={agent_id})"
     )
 
-    # TODO: Send command to agent via control websocket to execute disable_uac()
-    # For now, return a placeholder response
+    # Send command to agent via WebSocket control channel
+    command = {"type": "command", "cmd": "disable-uac"}
+    agent_connected = await send_command_to_agent(agent.uuid, command)
+
+    message = "UAC disable command sent to agent (requires reboot to take effect)"
+    if not agent_connected:
+        message = (
+            "Agent is not currently connected. Command will be queued and executed "
+            "when agent comes online. (requires reboot to take effect)"
+        )
+        logger.warning(f"[control_uac] Agent {agent.uuid} not connected - queuing command")
+
     return {
         "status": "ok",
-        "message": "UAC disable command sent to agent (requires reboot to take effect)",
+        "message": message,
         "action": "disable",
         "requires_reboot": True,
+        "agent_connected": agent_connected,
     }

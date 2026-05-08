@@ -145,6 +145,30 @@ async def get_agent(aid: str) -> AgentState:
         return a
 
 
+async def send_command_to_agent(agent_id: str, command: dict) -> bool:
+    """
+    Send a command to agent via WebSocket control channel.
+    Returns True if agent is connected and message was sent, False otherwise.
+    
+    Args:
+        agent_id: Agent UUID
+        command: Command dict, e.g., {"type": "command", "cmd": "disable-uac"}
+    """
+    agent_ws = HUB.agent_ws.get(agent_id)
+    if agent_ws is None:
+        logger.warning(f"[relay] Agent {agent_id} not connected")
+        return False
+    
+    try:
+        msg = json.dumps(command)
+        await agent_ws.send_text(msg)
+        logger.info(f"[relay] Command sent to agent {agent_id}: {msg}")
+        return True
+    except Exception as e:
+        logger.error(f"[relay] Failed to send command to agent {agent_id}: {e}")
+        return False
+
+
 # ============ WebSocket CONTROL ============
 @router.websocket("/ws/control/agent/{aid}")
 async def ws_control_agent(ws: WebSocket, aid: str):
