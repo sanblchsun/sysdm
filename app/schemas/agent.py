@@ -44,3 +44,8 @@ class AgentTelemetryIn(BaseModel):
 # Schema for updating telemetry mode
 class AgentTelemetryModeUpdate(BaseModel):
     telemetry_mode: str  # "none", "basic", "full"
+
+
+# Schema for UAC control
+class AgentUACControl(BaseModel):
+    action: str  # "disable"

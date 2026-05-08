@@ -1,5 +1,10 @@
 <!-- app/templates/partials/bottom_panel.html -->
-<div class="bottom-panel">
+<div class="bottom-panel" {% if agent %}data-agent-id="{{ agent.id }}"{% endif %}>
+  <!-- Store agent ID for JavaScript access -->
+  <script>
+    window.currentAgentId = {% if agent %}{{ agent.id }}{% else %}null{% endif %};
+    console.log("[bottom_panel] Set window.currentAgentId =", window.currentAgentId);
+  </script>
   <!-- TOOLBAR -->
   <div class="bottom-tabs" role="tablist">
     <button class="tab active" data-tab="summary">
@@ -135,6 +140,12 @@
               <i class="fas fa-terminal"></i>
               <span class="icon-class icon-script"></span>
               <span>Run Script</span>
+            </div>
+
+            <div class="action-item" onclick="disableUAC()">
+              <i class="fas fa-shield-alt"></i>
+              <span class="icon-class icon-uac"></span>
+              <span>Disable UAC</span>
             </div>
 
             <hr class="action-separator" />

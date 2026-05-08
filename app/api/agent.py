@@ -15,6 +15,7 @@ from app.schemas.agent import (
     AgentRegisterIn,
     AgentRegisterOut,
     AgentTelemetryIn,
+    AgentUACControl,
 )
 from sqlalchemy import select, update
 from app.schemas.agent_update import (
@@ -71,7 +72,9 @@ async def register_agent(
             # Интернет-режим: ищем компанию по external_ip
             if not client_ip:
                 logger.warning("Cannot determine client IP for agent registration")
-                raise HTTPException(status_code=400, detail="Cannot determine client IP")
+                raise HTTPException(
+                    status_code=400, detail="Cannot determine client IP"
+                )
             result = await session.execute(
                 select(Company).where(Company.external_ip == client_ip)
             )
@@ -315,7 +318,9 @@ async def set_telemetry_mode(
 ):
     """Установить режим телеметрии для агента (none, basic, full)."""
     if data.telemetry_mode not in ["none", "basic", "full"]:
-        raise HTTPException(status_code=400, detail="Invalid telemetry_mode. Use: none, basic, full")
+        raise HTTPException(
+            status_code=400, detail="Invalid telemetry_mode. Use: none, basic, full"
+        )
 
     agent = await session.get(Agent, agent_id)
     if not agent:
@@ -325,3 +330,39 @@ async def set_telemetry_mode(
     await session.commit()
 
     return {"status": "ok", "telemetry_mode": agent.telemetry_mode}
+
+
+@router.post("/{agent_id}/control-uac")
+async def control_uac(
+    agent_id: int,
+    data: AgentUACControl,
+    session: AsyncSession = Depends(get_db),
+):
+    """Control UAC settings on remote agent."""
+    logger.info(
+        f"[control_uac] Received request: agent_id={agent_id}, action={data.action}"
+    )
+
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        logger.warning(f"[control_uac] Agent not found: {agent_id}")
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if data.action != "disable":
+        logger.warning(f"[control_uac] Invalid action: {data.action}")
+        raise HTTPException(
+            status_code=400, detail="Invalid action. Supported: 'disable'"
+        )
+
+    logger.info(
+        f"[control_uac] UAC disable requested for agent {agent.uuid} (id={agent_id})"
+    )
+
+    # TODO: Send command to agent via control websocket to execute disable_uac()
+    # For now, return a placeholder response
+    return {
+        "status": "ok",
+        "message": "UAC disable command sent to agent (requires reboot to take effect)",
+        "action": "disable",
+        "requires_reboot": True,
+    }

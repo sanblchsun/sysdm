@@ -55,6 +55,11 @@ struct RDPRuntime
 
     std::mutex ctrl_sock_m;
     struct TlsConn *ctrl_conn = nullptr;
+
+    // Retry logic for intermittent ffmpeg errors
+    int consecutive_ffmpeg_errors = 0;                            // счётчик ошибок подряд
+    std::chrono::steady_clock::time_point last_ffmpeg_error_time; // время последней ошибки
+    std::string last_ffmpeg_error;                                // описание последней ошибки
 };
 
 struct TlsConn;
@@ -134,6 +139,8 @@ private:
     // Ffmpeg (запускается обычным CreateProcessA - мы уже в сессии пользователя)
     static std::string build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &r);
     static HANDLE start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &pi);
+    static bool is_secure_desktop_active();
+    static bool is_consent_exe_running();
 
     // Control
     void ctrl_send_hello();

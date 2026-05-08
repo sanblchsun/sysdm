@@ -316,29 +316,29 @@ async def ingest(aid: str, request: Request):
                 if not chunk:
                     continue
                 total_bytes += len(chunk)
-                logger.debug(
-                    f"[relay] mjpeg {aid}: received chunk size={len(chunk)}, total_bytes={total_bytes}"
-                )
+                # logger.debug(
+                #     f"[relay] mjpeg {aid}: received chunk size={len(chunk)}, total_bytes={total_bytes}"
+                # )
                 buf.extend(chunk)
-                logger.debug(f"[relay] mjpeg {aid}: buf.size={len(buf)}")
+                # logger.debug(f"[relay] mjpeg {aid}: buf.size={len(buf)}")
                 while True:
                     soi = buf.find(MJPEG_SOI)
                     if soi < 0:
-                        logger.debug(
-                            f"[relay] mjpeg {aid}: no SOI found in buf, buf size={len(buf)}"
-                        )
+                        # logger.debug(
+                        #     f"[relay] mjpeg {aid}: no SOI found in buf, buf size={len(buf)}"
+                        # )
                         buf.clear()
                         break
                     if soi > 0:
-                        logger.debug(
-                            f"[relay] mjpeg {aid}: SOI at offset {soi}, skipping {soi} bytes"
-                        )
+                        # logger.debug(
+                        #     f"[relay] mjpeg {aid}: SOI at offset {soi}, skipping {soi} bytes"
+                        # )
                         del buf[:soi]
                     eoi = buf.find(MJPEG_EOI, 2)
                     if eoi < 0:
-                        logger.debug(
-                            f"[relay] mjpeg {aid}: no EOI found after SOI, buf size={len(buf)}"
-                        )
+                        # logger.debug(
+                        #     f"[relay] mjpeg {aid}: no EOI found after SOI, buf size={len(buf)}"
+                        # )
                         if len(buf) > MAX_MJPEG:
                             logger.warning(
                                 f"[relay] mjpeg {aid}: buf too large ({len(buf)}), clearing"
@@ -349,9 +349,9 @@ async def ingest(aid: str, request: Request):
                     del buf[: eoi + 2]
                     a.push_mjpeg(frame)
                     frame_count += 1
-                    logger.debug(
-                        f"[relay] mjpeg {aid}: decoded frame #{frame_count}, size={len(frame)}, updated={a.updated}"
-                    )
+                    # logger.debug(
+                    #     f"[relay] mjpeg {aid}: decoded frame #{frame_count}, size={len(frame)}, updated={a.updated}"
+                    # )
                     if frame_count % 10 == 0:
                         logger.info(
                             f"[relay] mjpeg {aid}: {frame_count} frames decoded so far"
@@ -429,17 +429,17 @@ async def list_agents() -> AgentsListResponse:
     """Список всех активных агентов"""
     now = time.time()
     out = []
-    logger.debug(
-        f"[relay] list_agents: total agents in AGENTS={len(AGENTS)}, now={now}"
-    )
+    # logger.debug(
+    #     f"[relay] list_agents: total agents in AGENTS={len(AGENTS)}, now={now}"
+    # )
     for aid, a in AGENTS.items():
         alive = a.updated > 0 and (now - a.updated) < 5.0
         age = now - a.updated if a.updated > 0 else -1
-        logger.debug(
-            f"[relay] agent {aid}: alive={alive}, updated={a.updated}, age={age:.1f}s, "
-            f"mjpeg_count={a.mjpeg_count}, codec_current={a.codec_current}, "
-            f"ctrl_connected={aid in HUB.agent_ws}"
-        )
+        # logger.debug(
+        #     f"[relay] agent {aid}: alive={alive}, updated={a.updated}, age={age:.1f}s, "
+        #     f"mjpeg_count={a.mjpeg_count}, codec_current={a.codec_current}, "
+        #     f"ctrl_connected={aid in HUB.agent_ws}"
+        # )
         out.append(
             AgentStatusResponse(
                 id=aid,

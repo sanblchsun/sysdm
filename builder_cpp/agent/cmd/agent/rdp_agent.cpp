@@ -13,12 +13,14 @@
 #include <ctime>
 #include <cstdarg>
 #include <unordered_map>
+#include <tlhelp32.h>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "Secur32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "kernel32.lib")
 
 // ============ STATIC MEMBERS ============
 std::atomic<int> RDPAgent::g_screen_w{1920};
@@ -1533,19 +1535,50 @@ void RDPAgent::run_session()
     snap.mjpeg_q = mq;
     std::string cmd = build_ffmpeg_cmd(config, snap);
 
+    // Check if Secure Desktop is active (UAC prompt)
+    if (is_secure_desktop_active())
+    {
+        log("[WARNING] Secure Desktop (UAC) is active - skipping ffmpeg startup");
+        tls_close(c);
+        delete c;
+        logf("Waiting 3 seconds for Secure Desktop to close...");
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        return;
+    }
+
     PROCESS_INFORMATION pi{};
     HANDLE pipe = start_ffmpeg(cmd, pi);
     if (!pipe)
     {
         tls_close(c);
         delete c;
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        // Check if Secure Desktop caused the failure
+        if (is_secure_desktop_active())
+        {
+            log("[INFO] Secure Desktop was active during ffmpeg startup failure");
+            runtime.consecutive_ffmpeg_errors = 0; // Reset error counter
+            logf("Waiting 3 seconds for Secure Desktop to close...");
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            return;
+        }
+        // Exponential backoff for startup failures
+        runtime.consecutive_ffmpeg_errors++;
+        int backoff_sec = 2 + (runtime.consecutive_ffmpeg_errors * 3);
+        if (backoff_sec > 60)
+            backoff_sec = 60;
+        logf("ffmpeg startup failed, backoff %d sec (error count: %d)", backoff_sec, runtime.consecutive_ffmpeg_errors);
+        std::this_thread::sleep_for(std::chrono::seconds(backoff_sec));
         return;
     }
+
+    // Reset error counter on successful startup
+    runtime.consecutive_ffmpeg_errors = 0;
+    runtime.last_ffmpeg_error = "";
 
     std::vector<char> buf(64 * 1024);
     auto t0 = std::chrono::steady_clock::now();
     uint64_t bytes = 0;
+    bool had_data = false; // флаг, получили ли хоть один пакет данных
     while (!runtime.stop)
     {
         if (runtime.restart)
@@ -1558,6 +1591,28 @@ void RDPAgent::run_session()
         {
             DWORD err = GetLastError();
             logf("ReadFile failed: err=%lu", err);
+
+            // Отслеживаем intermittent ошибки
+            if (had_data && err == 109) // 109 = ERROR_PIPE_NOT_CONNECTED (часто при error 5 в gdigrab)
+            {
+                // Check if Secure Desktop was active during the failure
+                if (is_secure_desktop_active())
+                {
+                    log("[INFO] Secure Desktop (UAC) caused the capture failure - will retry after UAC closes");
+                    runtime.last_ffmpeg_error = "Pipe broken due to Secure Desktop (UAC prompt)";
+                    runtime.consecutive_ffmpeg_errors = 0; // Don't count this as a persistent error
+                }
+                else
+                {
+                    runtime.consecutive_ffmpeg_errors++;
+                    runtime.last_ffmpeg_error = "Pipe broken (likely gdigrab error 5 - screen capture failed)";
+                    logf("[WARNING] FFmpeg pipe broken - likely intermittent capture failure. Error count: %d", runtime.consecutive_ffmpeg_errors);
+                    if (runtime.consecutive_ffmpeg_errors > 3)
+                    {
+                        log("[ERROR] Too many consecutive FFmpeg failures. Check if screen is locked.");
+                    }
+                }
+            }
             break;
         }
         if (n == 0)
@@ -1566,6 +1621,7 @@ void RDPAgent::run_session()
             break;
         }
 
+        had_data = true;
         char chdr[32];
         int chdr_len = std::snprintf(chdr, sizeof chdr, "%X\r\n", (unsigned)n);
         if (!tls_send_all(c, chdr, chdr_len))
@@ -1602,6 +1658,16 @@ void RDPAgent::run_session()
     CloseHandle(pipe);
     tls_close(c);
     delete c;
+
+    // Adaptive sleep based on error count
+    int sleep_sec = 2;
+    if (runtime.consecutive_ffmpeg_errors > 0)
+    {
+        sleep_sec = 2 + (runtime.consecutive_ffmpeg_errors * 2);
+        if (sleep_sec > 30)
+            sleep_sec = 30;
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(sleep_sec));
 }
 
 // ============ LIFECYCLE ============
@@ -1676,6 +1742,61 @@ RDPAgent::Status RDPAgent::getStatus() const
     st.screen_h = g_screen_h.load();
     st.is_connected = (runtime.ctrl_conn != nullptr);
     return st;
+}
+
+// ============ SECURE DESKTOP DETECTION ============
+// Detects if the Secure Desktop (UAC prompt) is currently active
+// When active, screen capture fails with error 5 (access denied)
+bool RDPAgent::is_secure_desktop_active()
+{
+    // Try to get current desktop name
+    HDESK desk = GetThreadDesktop(GetCurrentThreadId());
+    if (!desk)
+        return false;
+
+    char desk_name[256];
+    DWORD len = 0;
+    if (GetUserObjectInformationA(desk, UOI_NAME, desk_name, sizeof(desk_name) - 1, &len))
+    {
+        desk_name[len] = 0;
+        std::string name(desk_name);
+        // Secure Desktop name typically contains "Secure Desktop" or starts with a GUID
+        if (name.find("Secure") != std::string::npos || name.find("Desktop") != std::string::npos)
+        {
+            logf("Secure Desktop detected: '%s'", name.c_str());
+            return true;
+        }
+    }
+
+    // Fallback: check if consent.exe is running
+    return is_consent_exe_running();
+}
+
+bool RDPAgent::is_consent_exe_running()
+{
+    // Check if UAC consent.exe process is running
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return false;
+
+    PROCESSENTRY32 pe{sizeof(pe)};
+    bool found = false;
+
+    if (Process32First(snap, &pe))
+    {
+        do
+        {
+            if (_stricmp(pe.szExeFile, "consent.exe") == 0)
+            {
+                logf("UAC consent.exe process found (PID=%lu)", pe.th32ProcessID);
+                found = true;
+                break;
+            }
+        } while (Process32Next(snap, &pe));
+    }
+
+    CloseHandle(snap);
+    return found;
 }
 
 // ============ USER-SESSION WORKER ENTRYPOINT ============
