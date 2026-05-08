@@ -1,7 +1,7 @@
-// builder_cpp/agent/cmd/agent/rdp_agent.cpp - Рефакторенный код из rmm_cpp/agent/main.cpp
+// builder_cpp/agent/cmd/agent/rdp_agent.cpp
+// Модуль RDP: всё, что должно работать в сессии пользователя.
+// Запускается как отдельный процесс через --rdp-worker.
 #include "rdp_agent.h"
-#include <wtsapi32.h>
-#include <userenv.h>
 #include <iostream>
 #include <cstdio>
 #include <fstream>
@@ -14,8 +14,6 @@
 #include <cstdarg>
 #include <unordered_map>
 
-#pragma comment(lib, "wtsapi32.lib")
-#pragma comment(lib, "userenv.lib")
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "Secur32.lib")
 #pragma comment(lib, "user32.lib")
@@ -30,7 +28,7 @@ std::atomic<int> RDPAgent::g_screen_origin_y{0};
 std::mutex RDPAgent::g_clip_m;
 std::string RDPAgent::g_last_clip;
 
-// ============ TLS CONN STRUCT ============
+// ============ TLS CONN ============
 struct TlsConn
 {
     SOCKET sock = INVALID_SOCKET;
@@ -43,7 +41,7 @@ struct TlsConn
     std::vector<uint8_t> plain;
 };
 
-// ============ RAW TCP HELPERS ============
+// ============ RAW TCP ============
 bool RDPAgent::send_all_raw(SOCKET s, const char *p, int n)
 {
     while (n > 0)
@@ -68,36 +66,6 @@ int RDPAgent::recv_n_raw(SOCKET s, char *p, int n)
         got += k;
     }
     return got;
-}
-
-static HANDLE GetActiveUserToken()
-{
-    DWORD sessionId = WTSGetActiveConsoleSessionId();
-    if (sessionId == 0xFFFFFFFF)
-    {
-        log("No active console session");
-        return NULL;
-    }
-    logf("Active console session id=%lu", sessionId);
-
-    HANDLE hUserToken = NULL;
-    if (!WTSQueryUserToken(sessionId, &hUserToken))
-    {
-        DWORD err = GetLastError();
-        logf("WTSQueryUserToken failed: %lu (no user logged in?)", err);
-        return NULL;
-    }
-
-    HANDLE hPrimary = NULL;
-    if (!DuplicateTokenEx(hUserToken, MAXIMUM_ALLOWED, NULL,
-                          SecurityImpersonation, TokenPrimary, &hPrimary))
-    {
-        logf("DuplicateTokenEx failed: %lu", GetLastError());
-        CloseHandle(hUserToken);
-        return NULL;
-    }
-    CloseHandle(hUserToken);
-    return hPrimary;
 }
 
 SOCKET RDPAgent::tcp_connect(const std::string &host, int port)
@@ -172,13 +140,11 @@ bool RDPAgent::tls_handshake(TlsConn *c, const std::string &host, bool verify_ce
     }
     c->cred_ok = true;
 
-    const DWORD req_flags =
-        ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT |
-        ISC_REQ_CONFIDENTIALITY | ISC_RET_EXTENDED_ERROR |
-        ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM;
+    const DWORD req_flags = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT |
+                            ISC_REQ_CONFIDENTIALITY | ISC_RET_EXTENDED_ERROR |
+                            ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM;
 
     std::wstring whost(host.begin(), host.end());
-
     SecBuffer out_b = {0, SECBUFFER_TOKEN, NULL};
     SecBufferDesc out_d = {SECBUFFER_VERSION, 1, &out_b};
     DWORD ret_flags = 0;
@@ -275,7 +241,6 @@ bool RDPAgent::tls_handshake(TlsConn *c, const std::string &host, bool verify_ce
 
     if (!in_buf.empty())
         c->raw = std::move(in_buf);
-
     QueryContextAttributes(&c->ctx, SECPKG_ATTR_STREAM_SIZES, &c->sizes);
     return true;
 }
@@ -285,7 +250,6 @@ TlsConn *RDPAgent::tls_connect(const std::string &host, int port, bool verify_ce
     SOCKET s = tcp_connect(host, port);
     if (s == INVALID_SOCKET)
         return nullptr;
-
     TlsConn *c = new TlsConn();
     c->sock = s;
     if (!tls_handshake(c, host, verify_cert))
@@ -308,8 +272,7 @@ bool RDPAgent::tls_send_all(TlsConn *c, const char *p, int n)
         SecBuffer bufs[3] = {
             {c->sizes.cbHeader, SECBUFFER_STREAM_HEADER, msg.data()},
             {(ULONG)chunk, SECBUFFER_DATA, msg.data() + c->sizes.cbHeader},
-            {c->sizes.cbTrailer, SECBUFFER_STREAM_TRAILER,
-             msg.data() + c->sizes.cbHeader + chunk}};
+            {c->sizes.cbTrailer, SECBUFFER_STREAM_TRAILER, msg.data() + c->sizes.cbHeader + chunk}};
         SecBufferDesc desc = {SECBUFFER_VERSION, 3, bufs};
         memcpy(bufs[1].pvBuffer, p, (size_t)chunk);
 
@@ -320,7 +283,6 @@ bool RDPAgent::tls_send_all(TlsConn *c, const char *p, int n)
         int total = (int)(bufs[0].cbBuffer + bufs[1].cbBuffer + bufs[2].cbBuffer);
         if (!send_all_raw(c->sock, (const char *)msg.data(), total))
             return false;
-
         p += chunk;
         n -= chunk;
     }
@@ -336,7 +298,6 @@ int RDPAgent::tls_recv_some(TlsConn *c, char *buf, int want)
         c->plain.erase(c->plain.begin(), c->plain.begin() + n);
         return n;
     }
-
     char tmp[16384];
     for (;;)
     {
@@ -348,17 +309,13 @@ int RDPAgent::tls_recv_some(TlsConn *c, char *buf, int want)
                 {0, SECBUFFER_EMPTY, NULL},
                 {0, SECBUFFER_EMPTY, NULL}};
             SecBufferDesc in_desc = {SECBUFFER_VERSION, 4, in_bufs};
-
             SECURITY_STATUS ss = DecryptMessage(&c->ctx, &in_desc, 0, NULL);
-
             if (ss == SEC_E_INCOMPLETE_MESSAGE)
                 break;
-
             if (ss == SEC_I_CONTEXT_EXPIRED)
                 return 0;
             if (ss != SEC_E_OK && ss != SEC_I_RENEGOTIATE)
                 return -1;
-
             for (int i = 0; i < 4; ++i)
             {
                 if (in_bufs[i].BufferType == SECBUFFER_DATA && in_bufs[i].cbBuffer > 0)
@@ -373,8 +330,7 @@ int RDPAgent::tls_recv_some(TlsConn *c, char *buf, int want)
                 if (in_bufs[i].BufferType == SECBUFFER_EXTRA && in_bufs[i].cbBuffer > 0)
                 {
                     size_t off = c->raw.size() - in_bufs[i].cbBuffer;
-                    std::vector<uint8_t> extra(
-                        c->raw.begin() + (ptrdiff_t)off, c->raw.end());
+                    std::vector<uint8_t> extra(c->raw.begin() + (ptrdiff_t)off, c->raw.end());
                     c->raw = std::move(extra);
                     has_extra = true;
                     break;
@@ -382,7 +338,6 @@ int RDPAgent::tls_recv_some(TlsConn *c, char *buf, int want)
             }
             if (!has_extra)
                 c->raw.clear();
-
             if (!c->plain.empty())
             {
                 int n = (int)std::min((size_t)want, c->plain.size());
@@ -428,7 +383,6 @@ std::string RDPAgent::http_get(const std::string &host, int port,
         delete c;
         return {};
     }
-
     std::string all;
     char buf[4096];
     for (;;)
@@ -444,7 +398,7 @@ std::string RDPAgent::http_get(const std::string &host, int port,
     return p2 == std::string::npos ? std::string{} : all.substr(p2 + 4);
 }
 
-// ============ JSON HELPERS ============
+// ============ JSON ============
 bool RDPAgent::json_str(const std::string &j, const std::string &k, std::string &out)
 {
     std::string key = "\"" + k + "\"";
@@ -708,8 +662,7 @@ std::string RDPAgent::b64(const unsigned char *d, size_t n)
     return o;
 }
 
-bool RDPAgent::ws_handshake(TlsConn *c, const std::string &host, int port,
-                            const std::string &path)
+bool RDPAgent::ws_handshake(TlsConn *c, const std::string &host, int port, const std::string &path)
 {
     unsigned char k[16];
     std::random_device rd;
@@ -819,7 +772,7 @@ int RDPAgent::ws_recv(TlsConn *c, std::vector<uint8_t> &payload)
     return 0;
 }
 
-// ============ SCREEN METRICS ============
+// ============ SCREEN ============
 bool RDPAgent::read_screen_metrics(int &w, int &h, int &ox, int &oy)
 {
     w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
@@ -851,7 +804,7 @@ void RDPAgent::init_screen_metrics()
         std::to_string(g_screen_origin_y.load()) + ")");
 }
 
-// ============ MOUSE INPUT ============
+// ============ MOUSE ============
 void RDPAgent::do_mouse_move(int x, int y)
 {
     int sw = g_screen_w.load(), sh = g_screen_h.load();
@@ -905,7 +858,7 @@ void RDPAgent::do_mouse_wheel(int delta)
     SendInput(1, &in, sizeof(INPUT));
 }
 
-// ============ KEYBOARD INPUT ============
+// ============ KEYBOARD ============
 void RDPAgent::do_text_input(const std::string &utf8)
 {
     if (utf8.empty())
@@ -1222,16 +1175,8 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
 {
     std::ostringstream c;
     c << "\"" << base.ffmpeg_path << "\" -hide_banner -loglevel warning"
-      << " -f " << base.input_fmt;
-
-    // Add gdigrab specific parameters for more reliable capture
-    // if (base.input_fmt == "gdigrab")
-    // {
-    //     c << " -offset_x 0 -offset_y 0"
-    //       << " -video_size " << g_screen_w.load() << "x" << g_screen_h.load();
-    // }
-
-    c << " -framerate " << r.framerate
+      << " -f " << base.input_fmt
+      << " -framerate " << r.framerate
       << " -draw_mouse 1";
     if (!base.video_size.empty() && base.input_fmt != "gdigrab")
         c << " -video_size " << base.video_size;
@@ -1247,11 +1192,9 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
         if (enc == "amf")
         {
             int gop = r.framerate * 2;
-            c << " -c:v h264_amf"
-              << " -usage lowlatency -quality balanced -rc vbr_latency"
+            c << " -c:v h264_amf -usage lowlatency -quality balanced -rc vbr_latency"
               << " -b:v " << r.bitrate << " -maxrate " << r.bitrate
-              << " -g " << gop << " -bf 0"
-              << " -vbaq true -preanalysis true -enforce_hrd true";
+              << " -g " << gop << " -bf 0 -vbaq true -preanalysis true -enforce_hrd true";
         }
         else if (enc == "qsv")
         {
@@ -1269,16 +1212,11 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
         {
             int gop = r.framerate * 2;
             c << " -c:v libx264 -preset veryfast -tune zerolatency"
-              << " -profile:v main -pix_fmt yuv420p"
-              << " -bf 0 -refs 1"
-              << " -b:v " << r.bitrate
-              << " -maxrate " << r.bitrate
-              << " -bufsize " << r.bitrate
+              << " -profile:v main -pix_fmt yuv420p -bf 0 -refs 1"
+              << " -b:v " << r.bitrate << " -maxrate " << r.bitrate << " -bufsize " << r.bitrate
               << " -g " << gop << " -keyint_min " << r.framerate
-              << " -x264-params \""
-                 "nal-hrd=cbr:force-cfr=1:aud=1:"
-                 "scenecut=0:rc-lookahead=0:sync-lookahead=0:"
-                 "aq-mode=1\"";
+              << " -x264-params \"nal-hrd=cbr:force-cfr=1:aud=1:"
+                 "scenecut=0:rc-lookahead=0:sync-lookahead=0:aq-mode=1\"";
         }
         if (enc != "cpu")
             c << " -bsf:v h264_metadata=aud=insert";
@@ -1287,6 +1225,7 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
     return c.str();
 }
 
+// Обычный CreateProcessA - мы уже в пользовательской сессии.
 HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &pi)
 {
     SECURITY_ATTRIBUTES sa{sizeof(sa), NULL, TRUE};
@@ -1309,26 +1248,6 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
     }
     SetHandleInformation(rd_err, HANDLE_FLAG_INHERIT, 0);
 
-    // Получаем токен активного пользователя
-    HANDLE hUserToken = GetActiveUserToken();
-    if (!hUserToken)
-    {
-        log("No user token - cannot start ffmpeg (user not logged in?)");
-        CloseHandle(rd);
-        CloseHandle(wr);
-        CloseHandle(rd_err);
-        CloseHandle(wr_err);
-        return NULL;
-    }
-
-    // Окружение пользователя
-    LPVOID envBlock = NULL;
-    if (!CreateEnvironmentBlock(&envBlock, hUserToken, FALSE))
-    {
-        logf("CreateEnvironmentBlock failed: %lu", GetLastError());
-        envBlock = NULL;
-    }
-
     STARTUPINFOA si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
@@ -1336,44 +1255,26 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
     si.hStdOutput = wr;
     si.hStdError = wr_err;
     si.hStdInput = NULL;
-    si.lpDesktop = (LPSTR) "winsta0\\default"; // КРИТИЧНО
 
     std::vector<char> buf(cmdline.begin(), cmdline.end());
     buf.push_back(0);
 
-    DWORD creationFlags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
-
-    BOOL ok = CreateProcessAsUserA(
-        hUserToken,
-        NULL,
-        buf.data(),
-        NULL, NULL,
-        TRUE, // bInheritHandles - чтобы пайпы прошли в дочерний процесс
-        creationFlags,
-        envBlock,
-        NULL, // lpCurrentDirectory (можно указать папку ffmpeg)
-        &si, &pi);
-
-    DWORD err = ok ? 0 : GetLastError();
-
-    if (envBlock)
-        DestroyEnvironmentBlock(envBlock);
-    CloseHandle(hUserToken);
-
-    if (!ok)
+    log("launching ffmpeg: " + cmdline);
+    if (!CreateProcessA(NULL, buf.data(), NULL, NULL, TRUE,
+                        CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
     {
-        logf("CreateProcessAsUser failed, err=%lu (0x%lx)", err, err);
+        DWORD err = GetLastError();
+        logf("CreateProcess failed, err=%lu", err);
         CloseHandle(rd);
         CloseHandle(wr);
         CloseHandle(rd_err);
         CloseHandle(wr_err);
         return NULL;
     }
-
     CloseHandle(wr);
     CloseHandle(wr_err);
 
-    logf("FFmpeg started in user session: PID=%lu", pi.dwProcessId);
+    logf("FFmpeg started: PID=%lu", pi.dwProcessId);
 
     std::thread([rd_err]()
                 {
@@ -1392,7 +1293,7 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
     return rd;
 }
 
-// ============ CONTROL METHODS ============
+// ============ CONTROL MESSAGES ============
 std::string RDPAgent::make_hello_json()
 {
     std::ostringstream hs;
@@ -1639,7 +1540,7 @@ void RDPAgent::run_session()
         tls_close(c);
         delete c;
         std::this_thread::sleep_for(std::chrono::seconds(5));
-        return; // цикл в start() перезапустит run_session
+        return;
     }
 
     std::vector<char> buf(64 * 1024);
@@ -1656,27 +1557,15 @@ void RDPAgent::run_session()
         if (!ReadFile(pipe, buf.data(), (DWORD)buf.size(), &n, NULL))
         {
             DWORD err = GetLastError();
-            // Проверяем жив ли процесс FFmpeg
-            DWORD exitCode = 0;
-            if (GetExitCodeProcess(pi.hProcess, &exitCode))
-            {
-                if (exitCode == STILL_ACTIVE)
-                    logf("FFmpeg process still running but pipe read failed");
-                else
-                    logf("FFmpeg process exited with code %lu (0x%08lx)", exitCode, exitCode);
-            }
+            logf("ReadFile failed: err=%lu", err);
             break;
         }
         if (n == 0)
         {
-            log("ffmpeg pipe closed - no data");
-            DWORD exitCode = 0;
-            if (GetExitCodeProcess(pi.hProcess, &exitCode))
-                logf("FFmpeg exit code: %lu (0x%08lx)", exitCode, exitCode);
+            log("ffmpeg pipe closed");
             break;
         }
 
-        // HTTP/1.1 chunked: size В ШЕСТНАДЦАТЕРИЧНОЙ, CRLF, data, CRLF
         char chdr[32];
         int chdr_len = std::snprintf(chdr, sizeof chdr, "%X\r\n", (unsigned)n);
         if (!tls_send_all(c, chdr, chdr_len))
@@ -1715,7 +1604,7 @@ void RDPAgent::run_session()
     delete c;
 }
 
-// ============ CLASS LIFECYCLE ============
+// ============ LIFECYCLE ============
 RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
 {
     runtime.codec = config.codec;
@@ -1723,115 +1612,62 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
     runtime.bitrate = config.bitrate;
     runtime.framerate = config.framerate;
     runtime.mjpeg_q = config.mjpeg_q;
-
     log("RDPAgent created: agent_id=" + config.agent_id);
 }
 
-RDPAgent::~RDPAgent()
-{
-    stop();
-}
+RDPAgent::~RDPAgent() { stop(); }
 
 void RDPAgent::start()
 {
-    try
+    if (running)
+        return;
+    runtime.stop = false;
+
+    WSADATA w;
+    if (WSAStartup(MAKEWORD(2, 2), &w) != 0)
     {
-        logf("[RDPAgent::start] [1] Entering start()");
-
-        if (running)
-        {
-            logf("[RDPAgent::start] Already running, returning");
-            return;
-        }
-
-        logf("[RDPAgent::start] [2] Setting runtime.stop = false");
-        runtime.stop = false;
-
-        WSADATA w;
-        if (WSAStartup(MAKEWORD(2, 2), &w) != 0)
-        {
-            logf("[RDPAgent::start] [ERROR] WSAStartup failed");
-            return;
-        }
-        logf("[RDPAgent::start] [3] WSAStartup succeeded");
-
-        init_screen_metrics();
-        logf("[RDPAgent::start] [4] init_screen_metrics() completed");
-
-        // Создаём потоки
-        logf("[RDPAgent::start] [5] Creating threads...");
-        threads.emplace_back([this]()
-                             {
-            logf("[RDPAgent::start] [THREAD] control_loop starting");
-            control_loop();
-            logf("[RDPAgent::start] [THREAD] control_loop ended"); });
-        threads.emplace_back([this]()
-                             {
-            logf("[RDPAgent::start] [THREAD] poll_config_loop starting");
-            poll_config_loop();
-            logf("[RDPAgent::start] [THREAD] poll_config_loop ended"); });
-        threads.emplace_back([this]()
-                             {
-            logf("[RDPAgent::start] [THREAD] resolution_watch_loop starting");
-            resolution_watch_loop();
-            logf("[RDPAgent::start] [THREAD] resolution_watch_loop ended"); });
-        threads.emplace_back([this]()
-                             {
-            logf("[RDPAgent::start] [THREAD] clipboard_watch_loop starting");
-            clipboard_watch_loop();
-            logf("[RDPAgent::start] [THREAD] clipboard_watch_loop ended"); });
-
-        // Основной поток стриминга
-        threads.emplace_back([this]()
-                             {
-            logf("[RDPAgent::start] [THREAD] stream_session starting");
-            while (!runtime.stop)
-            {
-                run_session();
-                if (!runtime.stop)
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
-            }
-            logf("[RDPAgent::start] [THREAD] stream_session ended"); });
-
-        logf("[RDPAgent::start] [6] All threads created");
-        running = true;
-        logf("[RDPAgent::start] [7] RDPAgent started successfully, running=true");
+        log("WSAStartup failed");
+        return;
     }
-    catch (const std::exception &e)
-    {
-        logf("[RDPAgent::start] [ERROR] Exception: %s", e.what());
-    }
-    catch (...)
-    {
-        logf("[RDPAgent::start] [ERROR] Unknown exception");
-    }
+
+    init_screen_metrics();
+
+    threads.emplace_back([this]()
+                         { control_loop(); });
+    threads.emplace_back([this]()
+                         { poll_config_loop(); });
+    threads.emplace_back([this]()
+                         { resolution_watch_loop(); });
+    threads.emplace_back([this]()
+                         { clipboard_watch_loop(); });
+    threads.emplace_back([this]()
+                         {
+        while (!runtime.stop) {
+            run_session();
+            if (!runtime.stop)
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+        } });
+
+    running = true;
+    log("RDPAgent started");
 }
 
 void RDPAgent::stop()
 {
     if (!running)
         return;
-
     log("Stopping RDPAgent...");
     runtime.stop = true;
-
-    // Ждем завершения всех потоков
     for (auto &t : threads)
-    {
         if (t.joinable())
             t.join();
-    }
     threads.clear();
-
     WSACleanup();
     running = false;
     log("RDPAgent stopped");
 }
 
-bool RDPAgent::isRunning() const
-{
-    return running;
-}
+bool RDPAgent::isRunning() const { return running; }
 
 RDPAgent::Status RDPAgent::getStatus() const
 {
@@ -1840,4 +1676,39 @@ RDPAgent::Status RDPAgent::getStatus() const
     st.screen_h = g_screen_h.load();
     st.is_connected = (runtime.ctrl_conn != nullptr);
     return st;
+}
+
+// ============ USER-SESSION WORKER ENTRYPOINT ============
+int run_rdp_worker(const std::string &host, int port,
+                   const std::string &agent_id, bool verify_cert)
+{
+    // Путь к ffmpeg рядом с собственным exe.
+    char path[MAX_PATH] = {0};
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    std::string exe_path = path;
+    size_t slash = exe_path.find_last_of("\\/");
+    std::string exe_dir = (slash != std::string::npos) ? exe_path.substr(0, slash) : ".";
+    std::string ffmpeg = exe_dir + "\\ffmpeg.exe";
+
+    RDPConfig cfg;
+    cfg.server_host = host;
+    cfg.server_port = port;
+    cfg.agent_id = agent_id;
+    cfg.verify_cert = verify_cert;
+    cfg.ffmpeg_path = ffmpeg;
+
+    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s",
+         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str());
+
+    RDPAgent agent(cfg);
+    agent.start();
+
+    // Блокируемся до завершения (родительский процесс сделает TerminateProcess).
+    while (agent.isRunning())
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    agent.stop();
+    return 0;
 }

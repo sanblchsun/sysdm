@@ -7,7 +7,6 @@ import platform
 import shutil
 from pathlib import Path
 
-# Add project root to Python path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -22,37 +21,26 @@ CPP_AGENT_DIR = PROJECT_ROOT / "builder_cpp" / "agent"
 DIST_DIR = PROJECT_ROOT / "dist" / "agents"
 DIST_DIR.mkdir(parents=True, exist_ok=True)
 
-# ffmpeg location
 FFMPEG_SOURCE = PROJECT_ROOT / "dist" / "ffmpeg.exe"
 
 CPP_ENTRYPOINT = CPP_AGENT_DIR / "cmd" / "agent" / "main.cpp"
 CPP_RDP_AGENT = CPP_AGENT_DIR / "cmd" / "agent" / "rdp_agent.cpp"
-GOOS = "windows"
-GOARCH = "amd64"
 
-# Determine compiler based on OS
 CURRENT_OS = platform.system()
 if CURRENT_OS == "Windows":
     GXX = "C:/msys64/ucrt64/bin/g++.exe"
-elif CURRENT_OS == "Linux":
-    # For Linux-to-Windows cross-compilation using MinGW-w64
-    GXX = "x86_64-w64-mingw32-g++"
 else:
-    # macOS or other
     GXX = "x86_64-w64-mingw32-g++"
 
 
 def increment_build_slug(last_slug: str | None) -> str:
     if not last_slug:
         return "1.0.0"
-
     parts = last_slug.split(".")
     if len(parts) != 3:
         return "1.0.0"
-
     major, minor, patch = map(int, parts)
-    patch += 1
-    return f"{major}.{minor}.{patch}"
+    return f"{major}.{minor}.{patch + 1}"
 
 
 def sha256_file(path: Path) -> str:
@@ -65,17 +53,15 @@ def sha256_file(path: Path) -> str:
 
 def build_exe(build_slug: str, server_url: str) -> Path:
     output_exe = DIST_DIR / f"agent_universal_{build_slug}.exe"
-
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"[+] Building {output_exe.name}")
-    print(f"[i] Using compiler: {GXX}")
-    print(f"[i] Platform: {CURRENT_OS}")
+    print(f"[i] Compiler: {GXX}  Platform: {CURRENT_OS}")
 
     cmd = [
         GXX,
-        "-std=c++17",  # ← ДОБАВИТЬ: стандарт C++17
-        "-O2",  # ← (опционально) оптимизация release
+        "-std=c++17",
+        "-O2",
         "-o",
         str(output_exe),
         f'-DSERVER_URL="{server_url}"',
@@ -92,23 +78,14 @@ def build_exe(build_slug: str, server_url: str) -> Path:
         "-luserenv",
         "-static",
     ]
-    ...
 
-    # For Linux cross-compilation, add additional flags
-    if CURRENT_OS == "Linux":
-        print("[i] Using MinGW-w64 cross-compilation settings")
-
-    print(f"[+] Running: {' '.join(cmd)}")
-
-    # Remove existing file if it exists to avoid permission issues
     if output_exe.exists():
         try:
             output_exe.unlink()
         except PermissionError:
-            print(f"[!] Cannot delete existing file, trying to build anyway")
+            print("[!] Cannot delete existing file, trying to build anyway")
 
-    # Windows native: use shell=True
-    # Linux: use list directly without shell
+    print(f"[+] Running: {' '.join(cmd)}")
     if CURRENT_OS == "Windows":
         subprocess.run(" ".join(cmd), shell=True, check=True, cwd=str(CPP_AGENT_DIR))
     else:
@@ -142,16 +119,11 @@ async def build_agent() -> None:
         sha256 = sha256_file(exe_path)
         print(f"[i] SHA256: {sha256}")
 
-        build = AgentBuild(
-            build_slug=new_build_slug,
-            sha256=sha256,
-            is_active=False,
-        )
+        build = AgentBuild(build_slug=new_build_slug, sha256=sha256, is_active=False)
         session.add(build)
         await session.flush()
 
         await activate_build(session, build.id)
-
         print(f"[+] Universal agent built: {exe_path.name}")
 
 

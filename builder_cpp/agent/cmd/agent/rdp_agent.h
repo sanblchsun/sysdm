@@ -17,7 +17,7 @@
 #include <thread>
 #include <memory>
 
-// ============ LOGGING ============
+// ============ LOGGING (реализуется в main.cpp) ============
 extern void log(const char *msg);
 extern void log(const std::string &msg);
 extern void logf(const char *fmt, ...);
@@ -67,12 +67,10 @@ public:
     RDPAgent(const RDPConfig &config);
     ~RDPAgent();
 
-    // Lifecycle
     void start();
     void stop();
     bool isRunning() const;
 
-    // Status
     struct Status
     {
         int screen_w = 1920;
@@ -90,7 +88,7 @@ private:
     std::vector<std::thread> threads;
     bool running = false;
 
-    // ========== TLS ==========
+    // TLS
     static TlsConn *tls_connect(const std::string &host, int port, bool verify_cert);
     static void tls_close(TlsConn *c);
     static bool tls_handshake(TlsConn *c, const std::string &host, bool verify_cert);
@@ -98,27 +96,27 @@ private:
     static int tls_recv_some(TlsConn *c, char *buf, int want);
     static int tls_recv_n(TlsConn *c, char *p, int n);
 
-    // ========== Raw TCP ==========
+    // Raw TCP
     static bool send_all_raw(SOCKET s, const char *p, int n);
     static int recv_n_raw(SOCKET s, char *p, int n);
     static SOCKET tcp_connect(const std::string &host, int port);
 
-    // ========== WebSocket ==========
+    // WebSocket
     static bool ws_handshake(TlsConn *c, const std::string &host, int port, const std::string &path);
     static bool ws_send(TlsConn *c, int op, const void *data, size_t len);
     static int ws_recv(TlsConn *c, std::vector<uint8_t> &payload);
     static std::string b64(const unsigned char *d, size_t n);
 
-    // ========== HTTP ==========
+    // HTTP
     static std::string http_get(const std::string &host, int port, const std::string &path, bool verify_cert);
 
-    // ========== JSON ==========
+    // JSON
     static bool json_str(const std::string &j, const std::string &k, std::string &out);
     static bool json_int(const std::string &j, const std::string &k, int &out);
     static bool json_str_ex(const std::string &j, const std::string &k, std::string &out);
     static std::string json_escape(const std::string &s);
 
-    // ========== INPUT HANDLERS ==========
+    // Input
     static void do_mouse_move(int x, int y);
     static void do_mouse_button(int button, bool down);
     static void do_mouse_wheel(int delta);
@@ -129,27 +127,27 @@ private:
     static void clipboard_write_utf8(const std::string &utf8);
     static void handle_control(const std::string &j);
 
-    // ========== SCREEN METRICS ==========
+    // Screen metrics
     static bool read_screen_metrics(int &w, int &h, int &ox, int &oy);
     static void init_screen_metrics();
 
-    // ========== FFMPEG ==========
+    // Ffmpeg (запускается обычным CreateProcessA - мы уже в сессии пользователя)
     static std::string build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &r);
     static HANDLE start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &pi);
 
-    // ========== CONTROL ==========
+    // Control
     void ctrl_send_hello();
     void ctrl_send_clipboard(const std::string &text);
     static std::string make_hello_json();
 
-    // ========== LOOP THREADS ==========
+    // Loops
     void control_loop();
     void poll_config_loop();
     void resolution_watch_loop();
     void clipboard_watch_loop();
     void run_session();
 
-    // ========== GLOBALS (static for access) ==========
+    // Globals
     static std::atomic<int> g_screen_w;
     static std::atomic<int> g_screen_h;
     static std::atomic<int> g_screen_origin_x;
@@ -157,5 +155,11 @@ private:
     static std::mutex g_clip_m;
     static std::string g_last_clip;
 };
+
+// ============ USER-SESSION WORKER ENTRYPOINT ============
+// Вызывается из main.cpp при флаге --rdp-worker.
+// Блокирует поток до завершения процесса (TerminateProcess извне).
+int run_rdp_worker(const std::string &host, int port,
+                   const std::string &agent_id, bool verify_cert);
 
 #endif // RDP_AGENT_H

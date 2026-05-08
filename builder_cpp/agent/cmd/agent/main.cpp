@@ -1,4 +1,7 @@
 // builder_cpp/agent/cmd/agent/main.cpp
+// Агент: Windows-сервис с регистрацией/телеметрией/апдейтом.
+// RDP-часть вынесена в отдельный процесс-worker, запускаемый в сессии
+// пользователя через CreateProcessAsUserA (флаг --rdp-worker).
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winhttp.h>
@@ -6,6 +9,8 @@
 #include <processthreadsapi.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <wtsapi32.h>
+#include <userenv.h>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -28,15 +33,14 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "wtsapi32.lib")
+#pragma comment(lib, "userenv.lib")
 
-// RDP Agent module
 #include "rdp_agent.h"
 
-// Default values (overridden via compiler macros)
 #ifndef SERVER_URL
 #define SERVER_URL "http://localhost:8000"
 #endif
-
 #ifndef BUILD_SLUG
 #define BUILD_SLUG "1.0.0"
 #endif
@@ -44,69 +48,15 @@
 std::string serverURL = SERVER_URL;
 std::string buildSlug = BUILD_SLUG;
 
-// Manual URL parsing to avoid WinHttpCrackUrl issues with query params
-bool parseUrl(const std::string &url, std::string &host, int &port, std::string &path, std::string &query)
-{
-    // Simple parser for http://host:port/path?query
-    host.clear();
-    port = 80;
-    path = "/";
-    query.clear();
-
-    std::string u = url;
-    if (u.find("http://") == 0)
-        u = u.substr(7);
-    else if (u.find("https://") == 0)
-    {
-        u = u.substr(8);
-        port = 443;
-    }
-
-    size_t pathPos = u.find('/');
-    size_t queryPos = u.find('?');
-
-    std::string hostPort;
-    if (pathPos != std::string::npos)
-    {
-        hostPort = u.substr(0, pathPos);
-        if (queryPos != std::string::npos && queryPos > pathPos)
-        {
-            path = u.substr(pathPos, queryPos - pathPos);
-            query = u.substr(queryPos);
-        }
-        else
-        {
-            path = u.substr(pathPos);
-        }
-    }
-    else
-    {
-        hostPort = u;
-    }
-
-    size_t colonPos = hostPort.find(':');
-    if (colonPos != std::string::npos)
-    {
-        host = hostPort.substr(0, colonPos);
-        port = std::stoi(hostPort.substr(colonPos + 1));
-    }
-    else
-    {
-        host = hostPort;
-    }
-
-    return !host.empty();
-}
-
 std::mutex logMutex;
 std::ofstream logFile;
 std::atomic<bool> g_stopRequested(false);
-std::string g_telemetryMode = "none"; // "none", "basic", "full"
+std::string g_telemetryMode = "none";
 SERVICE_STATUS serviceStatus = {0};
 SERVICE_STATUS_HANDLE serviceHandle = NULL;
 HANDLE stopEvent = NULL;
 
-// ==================== UTILITIES ====================
+// ==================== LOGGER ====================
 
 std::string getExePath()
 {
@@ -122,16 +72,11 @@ std::string getExeDir()
     return (pos != std::string::npos) ? exePath.substr(0, pos) : exePath;
 }
 
-std::string getFFmpegPath()
-{
-    std::string exeDir = getExeDir();
-    return exeDir + "\\ffmpeg.exe";
-}
+std::string getFFmpegPath() { return getExeDir() + "\\ffmpeg.exe"; }
 
-void setupFileLogger()
+void setupFileLogger(const std::string &name = "agent.log")
 {
-    std::string exeDir = getExeDir();
-    std::string logPath = exeDir + "\\agent.log";
+    std::string logPath = getExeDir() + "\\" + name;
     logFile.open(logPath, std::ios::app | std::ios::out);
 }
 
@@ -144,7 +89,8 @@ void log(const char *msg)
     localtime_s(&tmTemp, &time);
     char timeStr[32];
     strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &tmTemp);
-    std::string line = std::string(timeStr) + " " + msg + "\n";
+    std::string line = std::string(timeStr) + " [pid=" +
+                       std::to_string(GetCurrentProcessId()) + "] " + msg + "\n";
     std::cout << line;
     if (logFile.is_open())
     {
@@ -155,7 +101,7 @@ void log(const char *msg)
 
 void logf(const char *fmt, ...)
 {
-    char buf[1024];
+    char buf[2048];
     va_list args;
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
@@ -163,18 +109,59 @@ void logf(const char *fmt, ...)
     log(buf);
 }
 
-// Overload для std::string
-void log(const std::string &msg)
+void log(const std::string &msg) { log(msg.c_str()); }
+
+// ==================== URL PARSE ====================
+
+bool parseUrl(const std::string &url, std::string &host, int &port,
+              std::string &path, std::string &query)
 {
-    log(msg.c_str());
+    host.clear();
+    port = 80;
+    path = "/";
+    query.clear();
+    std::string u = url;
+    if (u.find("http://") == 0)
+        u = u.substr(7);
+    else if (u.find("https://") == 0)
+    {
+        u = u.substr(8);
+        port = 443;
+    }
+
+    size_t pathPos = u.find('/');
+    size_t queryPos = u.find('?');
+    std::string hostPort;
+    if (pathPos != std::string::npos)
+    {
+        hostPort = u.substr(0, pathPos);
+        if (queryPos != std::string::npos && queryPos > pathPos)
+        {
+            path = u.substr(pathPos, queryPos - pathPos);
+            query = u.substr(queryPos);
+        }
+        else
+            path = u.substr(pathPos);
+    }
+    else
+        hostPort = u;
+
+    size_t colonPos = hostPort.find(':');
+    if (colonPos != std::string::npos)
+    {
+        host = hostPort.substr(0, colonPos);
+        port = std::stoi(hostPort.substr(colonPos + 1));
+    }
+    else
+        host = hostPort;
+    return !host.empty();
 }
 
 // ==================== MACHINE UID ====================
 
 std::string loadOrCreateMachineUID()
 {
-    std::string exeDir = getExeDir();
-    std::string uidPath = exeDir + "\\machine_uid";
+    std::string uidPath = getExeDir() + "\\machine_uid";
     std::ifstream ifs(uidPath);
     if (ifs.good())
     {
@@ -233,39 +220,25 @@ std::string getLocalIP()
 
 std::string getExternalIP()
 {
-    log("Getting external IP...");
     HINTERNET hSession = WinHttpOpen(L"Agent/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
     if (!hSession)
-    {
-        logf("WinHttpOpen failed: %lu", GetLastError());
         return "";
-    }
     HINTERNET hConnect = WinHttpConnect(hSession, L"api.ipify.org", INTERNET_DEFAULT_HTTP_PORT, 0);
     if (!hConnect)
     {
-        logf("WinHttpConnect (ipify) failed: %lu", GetLastError());
         WinHttpCloseHandle(hSession);
         return "";
     }
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", NULL, NULL, NULL, NULL, 0);
     if (!hRequest)
     {
-        logf("WinHttpOpenRequest (ipify) failed: %lu", GetLastError());
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return "";
     }
-    if (!WinHttpSendRequest(hRequest, NULL, 0, NULL, 0, 0, 0))
+    if (!WinHttpSendRequest(hRequest, NULL, 0, NULL, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, NULL))
     {
-        logf("WinHttpSendRequest (ipify) failed: %lu", GetLastError());
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
-        return "";
-    }
-    if (!WinHttpReceiveResponse(hRequest, NULL))
-    {
-        logf("WinHttpReceiveResponse (ipify) failed: %lu", GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
@@ -282,13 +255,13 @@ std::string getExternalIP()
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
-    logf("External IP: %s", result.c_str());
     return result;
 }
 
 std::string getUsersAsString()
 {
-    std::string psCommand = "$OutputEncoding = [console]::InputEncoding = [console]::OutputEncoding = New-Object System.Text.UTF8Encoding; "
+    std::string psCommand = "$OutputEncoding = [console]::InputEncoding = [console]::OutputEncoding = "
+                            "New-Object System.Text.UTF8Encoding; "
                             "Get-LocalUser | Where-Object { $_.Enabled -eq $true } | ForEach-Object { $_.Name }";
     STARTUPINFOA si = {0};
     si.cb = sizeof(si);
@@ -305,7 +278,6 @@ std::string getUsersAsString()
     char *cmd = _strdup(cmdLine.c_str());
     if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
     {
-        logf("CreateProcess failed: %lu", GetLastError());
         free(cmd);
         CloseHandle(hRead);
         CloseHandle(hWrite);
@@ -378,59 +350,36 @@ std::string jsonEscape(const std::string &s)
 
 // ==================== HTTP CLIENT ====================
 
-bool postJSON(const std::string &url, const std::string &bodyStr, std::string &responseBody, int &statusCode)
+bool postJSON(const std::string &url, const std::string &bodyStr,
+              std::string &responseBody, int &statusCode)
 {
-    logf("HTTP POST to: %s", url.c_str());
-    logf("Body: %s", bodyStr.c_str());
-
-    // Parse URL manually to handle query parameters
     std::string host, path, query;
     int port;
     if (!parseUrl(url, host, port, path, query))
-    {
-        logf("URL parsing failed: %s", url.c_str());
         return false;
-    }
-
     std::string fullPath = path + query;
-    logf("Host: %s, Path: %s, Port: %d", host.c_str(), fullPath.c_str(), port);
 
     HINTERNET hSession = WinHttpOpen(L"Agent/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
     if (!hSession)
-    {
-        logf("WinHttpOpen failed: %lu", GetLastError());
         return false;
-    }
-
     std::wstring whost(host.begin(), host.end());
     HINTERNET hConnect = WinHttpConnect(hSession, whost.c_str(), port, 0);
     if (!hConnect)
     {
-        logf("WinHttpConnect failed: %lu", GetLastError());
         WinHttpCloseHandle(hSession);
         return false;
     }
-
-    // Use full path with query params for OpenRequest
     std::wstring wpath(fullPath.begin(), fullPath.end());
-
-    // Determine if HTTPS is needed
     DWORD dwFlags = 0;
     if (url.find("https://") == 0)
-    {
         dwFlags |= WINHTTP_FLAG_SECURE;
-    }
-
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", wpath.c_str(), NULL, NULL, NULL, dwFlags);
     if (!hRequest)
     {
-        logf("WinHttpOpenRequest failed: %lu", GetLastError());
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return false;
     }
-
-    // Ignore SSL certificate errors for self-signed certs in dev
     if (url.find("https://") == 0)
     {
         DWORD dwCertFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
@@ -439,48 +388,25 @@ bool postJSON(const std::string &url, const std::string &bodyStr, std::string &r
                             SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
         WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwCertFlags, sizeof(dwCertFlags));
     }
-
     std::wstring header = L"Content-Type: application/json\r\n";
-    if (!WinHttpAddRequestHeaders(hRequest, header.c_str(), (DWORD)header.size(), WINHTTP_ADDREQ_FLAG_ADD))
-    {
-        logf("WinHttpAddRequestHeaders failed: %lu", GetLastError());
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
-        return false;
-    }
-
+    WinHttpAddRequestHeaders(hRequest, header.c_str(), (DWORD)header.size(), WINHTTP_ADDREQ_FLAG_ADD);
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                            (LPVOID)bodyStr.c_str(), (DWORD)bodyStr.size(), (DWORD)bodyStr.size(), 0))
+                            (LPVOID)bodyStr.c_str(), (DWORD)bodyStr.size(),
+                            (DWORD)bodyStr.size(), 0) ||
+        !WinHttpReceiveResponse(hRequest, NULL))
     {
-        logf("WinHttpSendRequest failed: %lu", GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return false;
     }
-
-    if (!WinHttpReceiveResponse(hRequest, NULL))
-    {
-        logf("WinHttpReceiveResponse failed: %lu", GetLastError());
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
-        return false;
-    }
-
     DWORD dwStatusCode = 0;
     DWORD dwSize = sizeof(dwStatusCode);
-    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &dwStatusCode, &dwSize, NULL))
-    {
+    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            NULL, &dwStatusCode, &dwSize, NULL))
         statusCode = (int)dwStatusCode;
-    }
     else
-    {
         statusCode = 0;
-    }
-    logf("Response status: %d", statusCode);
-
     char buffer[4096] = {0};
     DWORD bytesRead = 0;
     std::string response;
@@ -490,12 +416,9 @@ bool postJSON(const std::string &url, const std::string &bodyStr, std::string &r
         response += buffer;
     }
     responseBody = response;
-    logf("Response body: %s", response.c_str());
-
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
-
     return true;
 }
 
@@ -503,31 +426,27 @@ bool postJSON(const std::string &url, const std::string &bodyStr, std::string &r
 
 struct TelemetryData
 {
-    std::string system;
-    std::string userName;
-    std::string ipAddr;
-    std::string externalIP;
+    std::string system, userName, ipAddr, externalIP;
     std::vector<std::string> disks;
-    uint64_t totalMemory;
-    uint64_t availableMemory;
+    uint64_t totalMemory = 0, availableMemory = 0;
 };
 
 std::string getTotalMemory()
 {
-    MEMORYSTATUSEX memStatus = {0};
-    memStatus.dwLength = sizeof(memStatus);
-    if (!GlobalMemoryStatusEx(&memStatus))
+    MEMORYSTATUSEX m = {0};
+    m.dwLength = sizeof(m);
+    if (!GlobalMemoryStatusEx(&m))
         return "0";
-    return std::to_string(memStatus.ullTotalPhys / (1024 * 1024));
+    return std::to_string(m.ullTotalPhys / (1024 * 1024));
 }
 
 std::string getAvailableMemory()
 {
-    MEMORYSTATUSEX memStatus = {0};
-    memStatus.dwLength = sizeof(memStatus);
-    if (!GlobalMemoryStatusEx(&memStatus))
+    MEMORYSTATUSEX m = {0};
+    m.dwLength = sizeof(m);
+    if (!GlobalMemoryStatusEx(&m))
         return "0";
-    return std::to_string(memStatus.ullAvailPhys / (1024 * 1024));
+    return std::to_string(m.ullAvailPhys / (1024 * 1024));
 }
 
 TelemetryData collectTelemetry()
@@ -537,7 +456,6 @@ TelemetryData collectTelemetry()
     data.userName = getUsersAsString();
     data.ipAddr = getLocalIP();
     data.externalIP = getExternalIP();
-    data.disks = {};
     data.totalMemory = std::stoull(getTotalMemory());
     data.availableMemory = std::stoull(getAvailableMemory());
     return data;
@@ -547,39 +465,29 @@ TelemetryData collectTelemetry()
 
 std::string sha256File(const std::string &path)
 {
-    logf("Calculating SHA256 for: %s", path.c_str());
     HCRYPTPROV hProv = 0;
     HCRYPTHASH hHash = 0;
-
     if (!CryptAcquireContext(&hProv, 0, 0, PROV_RSA_AES, CRYPT_VERIFYCONTEXT))
-    {
-        logf("CryptAcquireContext failed: %lu", GetLastError());
         return "";
-    }
-
     if (!CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash))
     {
-        logf("CryptCreateHash failed: %lu", GetLastError());
         CryptReleaseContext(hProv, 0);
         return "";
     }
-
-    HANDLE hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, 0);
+    HANDLE hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, 0,
+                               OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, 0);
     if (hFile == INVALID_HANDLE_VALUE)
     {
-        logf("CreateFile (sha256) failed: %lu", GetLastError());
         CryptDestroyHash(hHash);
         CryptReleaseContext(hProv, 0);
         return "";
     }
-
     BYTE rgbFile[4096];
     DWORD cbRead = 0;
     while (ReadFile(hFile, rgbFile, sizeof(rgbFile), &cbRead, NULL) && cbRead > 0)
     {
         if (!CryptHashData(hHash, rgbFile, cbRead, 0))
         {
-            logf("CryptHashData failed: %lu", GetLastError());
             CloseHandle(hFile);
             CryptDestroyHash(hHash);
             CryptReleaseContext(hProv, 0);
@@ -587,20 +495,16 @@ std::string sha256File(const std::string &path)
         }
     }
     CloseHandle(hFile);
-
     BYTE rgbHash[32];
     DWORD cbHash = 32;
     if (!CryptGetHashParam(hHash, HP_HASHVAL, rgbHash, &cbHash, 0))
     {
-        logf("CryptGetHashParam failed: %lu", GetLastError());
         CryptDestroyHash(hHash);
         CryptReleaseContext(hProv, 0);
         return "";
     }
-
     CryptDestroyHash(hHash);
     CryptReleaseContext(hProv, 0);
-
     std::string result;
     CHAR rgbDigits[] = "0123456789abcdef";
     for (DWORD i = 0; i < cbHash; i++)
@@ -611,8 +515,214 @@ std::string sha256File(const std::string &path)
         rgb[2] = 0;
         result += rgb;
     }
-    logf("SHA256: %s", result.c_str());
     return result;
+}
+
+// ==================== RDP WORKER LIFECYCLE ====================
+
+// Конфигурация worker'а, задаётся до старта watcher'а.
+std::string g_rdp_server_host;
+int g_rdp_server_port = 443;
+std::string g_rdp_agent_id;
+bool g_rdp_verify_cert = false; // self-signed → false
+
+PROCESS_INFORMATION g_rdp_worker_pi = {0};
+std::mutex g_rdp_worker_m;
+
+// Получить primary-token пользователя активной консольной сессии.
+// Если UAC разделил токен (пользователь admin, но живёт под filtered-токеном
+// Medium IL) — подменяем на linked/elevated токен (High IL), чтобы worker мог
+// инжектить ввод в окна администратора, Task Manager, regedit и пр.
+//
+// Требует SeTcbPrivilege (LocalSystem имеет).
+static HANDLE GetActiveUserToken()
+{
+    DWORD sessionId = WTSGetActiveConsoleSessionId();
+    if (sessionId == 0xFFFFFFFF)
+    {
+        log("No active console session");
+        return NULL;
+    }
+
+    HANDLE hUser = NULL;
+    if (!WTSQueryUserToken(sessionId, &hUser))
+    {
+        logf("WTSQueryUserToken failed: %lu", GetLastError());
+        return NULL;
+    }
+
+    // --- UAC: пытаемся получить elevated-версию токена ---
+    DWORD sz = 0;
+    TOKEN_ELEVATION_TYPE et = TokenElevationTypeDefault;
+    if (GetTokenInformation(hUser, TokenElevationType, &et, sizeof(et), &sz))
+    {
+        const char *etName =
+            (et == TokenElevationTypeDefault) ? "Default (no split)" : (et == TokenElevationTypeFull)  ? "Full (already elevated)"
+                                                                   : (et == TokenElevationTypeLimited) ? "Limited (filtered)"
+                                                                                                       : "Unknown";
+        logf("Active-user token elevation type: %d (%s)", (int)et, etName);
+
+        if (et == TokenElevationTypeLimited)
+        {
+            // У админа есть «парный» полный токен — берём его.
+            TOKEN_LINKED_TOKEN lt = {0};
+            if (GetTokenInformation(hUser, TokenLinkedToken, &lt, sizeof(lt), &sz))
+            {
+                log("Switched to linked (elevated) token for High IL worker");
+                CloseHandle(hUser);
+                hUser = lt.LinkedToken; // impersonation token
+            }
+            else
+            {
+                DWORD err = GetLastError();
+                logf("GetTokenInformation(TokenLinkedToken) failed: %lu "
+                     "(standard user? UAC off?) — continuing with filtered token",
+                     err);
+                // Это значит пользователь не админ. Оставляем filtered — будет Medium IL.
+                // Admin-окна всё равно не дадутся, но остальное будет работать.
+            }
+        }
+    }
+    else
+    {
+        logf("GetTokenInformation(TokenElevationType) failed: %lu", GetLastError());
+    }
+
+    // Для CreateProcessAsUser нужен primary-токен.
+    HANDLE hPrimary = NULL;
+    if (!DuplicateTokenEx(hUser, MAXIMUM_ALLOWED, NULL,
+                          SecurityImpersonation, TokenPrimary, &hPrimary))
+    {
+        logf("DuplicateTokenEx failed: %lu", GetLastError());
+        CloseHandle(hUser);
+        return NULL;
+    }
+    CloseHandle(hUser);
+    return hPrimary;
+}
+
+bool spawnRDPWorker()
+{
+    std::lock_guard<std::mutex> lk(g_rdp_worker_m);
+    if (g_rdp_worker_pi.hProcess)
+        return true; // already spawned
+
+    std::string selfPath = getExePath();
+    std::ostringstream args;
+    args << "\"" << selfPath << "\""
+         << " --rdp-worker"
+         << " --server=" << g_rdp_server_host
+         << " --port=" << g_rdp_server_port
+         << " --id=" << g_rdp_agent_id;
+    if (!g_rdp_verify_cert)
+        args << " --insecure";
+    std::string cmdline = args.str();
+
+    HANDLE hUserToken = GetActiveUserToken();
+    if (!hUserToken)
+    {
+        // Никого не залогинено — watcher попробует позже.
+        return false;
+    }
+
+    LPVOID envBlock = NULL;
+    if (!CreateEnvironmentBlock(&envBlock, hUserToken, FALSE))
+        envBlock = NULL;
+
+    STARTUPINFOA si = {0};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.lpDesktop = (LPSTR) "winsta0\\default";
+
+    std::vector<char> buf(cmdline.begin(), cmdline.end());
+    buf.push_back(0);
+
+    PROCESS_INFORMATION pi = {0};
+    BOOL ok = CreateProcessAsUserA(
+        hUserToken, NULL, buf.data(),
+        NULL, NULL, FALSE,
+        CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+        envBlock, NULL, &si, &pi);
+    DWORD err = ok ? 0 : GetLastError();
+
+    if (envBlock)
+        DestroyEnvironmentBlock(envBlock);
+    CloseHandle(hUserToken);
+
+    if (!ok)
+    {
+        logf("CreateProcessAsUser failed: %lu — cmd=%s", err, cmdline.c_str());
+        return false;
+    }
+
+    g_rdp_worker_pi = pi;
+    logf("RDP worker spawned, PID=%lu, cmd=%s", pi.dwProcessId, cmdline.c_str());
+    return true;
+}
+
+void stopRDPWorker()
+{
+    std::lock_guard<std::mutex> lk(g_rdp_worker_m);
+    if (!g_rdp_worker_pi.hProcess)
+        return;
+    log("Stopping RDP worker...");
+    TerminateProcess(g_rdp_worker_pi.hProcess, 0);
+    WaitForSingleObject(g_rdp_worker_pi.hProcess, 5000);
+    CloseHandle(g_rdp_worker_pi.hProcess);
+    CloseHandle(g_rdp_worker_pi.hThread);
+    g_rdp_worker_pi = {0};
+    log("RDP worker stopped");
+}
+
+void rdpWorkerWatcher()
+{
+    int spawn_fail_count = 0;
+    while (!g_stopRequested)
+    {
+        // Проверяем живость worker'а
+        HANDLE hProc = NULL;
+        {
+            std::lock_guard<std::mutex> lk(g_rdp_worker_m);
+            hProc = g_rdp_worker_pi.hProcess;
+        }
+        if (hProc)
+        {
+            DWORD exit_code = 0;
+            if (GetExitCodeProcess(hProc, &exit_code) && exit_code != STILL_ACTIVE)
+            {
+                logf("RDP worker died, exit code %lu — respawn", exit_code);
+                std::lock_guard<std::mutex> lk(g_rdp_worker_m);
+                CloseHandle(g_rdp_worker_pi.hProcess);
+                CloseHandle(g_rdp_worker_pi.hThread);
+                g_rdp_worker_pi = {0};
+            }
+        }
+
+        // Если нет worker'а — пытаемся запустить
+        {
+            std::lock_guard<std::mutex> lk(g_rdp_worker_m);
+            hProc = g_rdp_worker_pi.hProcess;
+        }
+        if (!hProc)
+        {
+            if (spawnRDPWorker())
+            {
+                spawn_fail_count = 0;
+            }
+            else
+            {
+                // Не логируем каждую попытку, чтобы не спамить.
+                if (spawn_fail_count == 0 || spawn_fail_count % 20 == 0)
+                {
+                    logf("RDP worker spawn attempt #%d failed (user not logged in?)",
+                         spawn_fail_count + 1);
+                }
+                spawn_fail_count++;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+    }
 }
 
 // ==================== UPDATE ====================
@@ -625,26 +735,20 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
     int statusCode;
 
     if (!postJSON(url, body, responseBody, statusCode) || statusCode != 200)
-    {
-        logf("Update check failed: %s", responseBody.c_str());
         return;
-    }
-
     if (responseBody.find("\"update\":true") == std::string::npos)
         return;
 
     logf("New version available: %s", responseBody.c_str());
-
     std::string newBuild, downloadUrl, sha256;
     size_t buildPos = responseBody.find("\"build\":\"");
     size_t urlPos = responseBody.find("\"url\":\"");
     size_t shaPos = responseBody.find("\"sha256\":\"");
-
     if (buildPos != std::string::npos && urlPos != std::string::npos && shaPos != std::string::npos)
     {
-        buildPos += 9; // length of "\"build\":\""
-        urlPos += 7;   // length of "\"url\":\""
-        shaPos += 10;  // length of "\"sha256\":\""
+        buildPos += 9;
+        urlPos += 7;
+        shaPos += 10;
         size_t buildEnd = responseBody.find("\"", buildPos);
         size_t urlEnd = responseBody.find("\"", urlPos);
         size_t shaEnd = responseBody.find("\"", shaPos);
@@ -655,75 +759,46 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
             sha256 = responseBody.substr(shaPos, shaEnd - shaPos);
         }
     }
-
     if (newBuild.empty() || downloadUrl.empty())
     {
         log("Invalid update response");
         return;
     }
 
-    logf("New build: %s, URL: %s, SHA256: %s", newBuild.c_str(), downloadUrl.c_str(), sha256.c_str());
-
+    logf("Updating to %s, URL=%s, SHA=%s", newBuild.c_str(), downloadUrl.c_str(), sha256.c_str());
     if (g_stopRequested)
-    {
-        log("Update cancelled: service stopping");
         return;
-    }
 
     std::string exePath = getExePath();
     std::string tmpPath = exePath + ".new";
 
-    // Download new version
-    logf("Downloading from: %s", downloadUrl.c_str());
-
-    // Parse download URL manually
     std::string host, path, query;
     int port;
     if (!parseUrl(downloadUrl, host, port, path, query))
-    {
-        logf("URL parsing failed: %s", downloadUrl.c_str());
         return;
-    }
-
     std::string fullPath = path + query;
-    logf("Download - Host: %s, Path: %s, Port: %d", host.c_str(), fullPath.c_str(), port);
 
     HINTERNET hSession = WinHttpOpen(L"Agent/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
     if (!hSession)
-    {
-        logf("WinHttpOpen (download) failed: %lu", GetLastError());
         return;
-    }
-
     std::wstring whost(host.begin(), host.end());
     HINTERNET hConnect = WinHttpConnect(hSession, whost.c_str(), port, 0);
     if (!hConnect)
     {
-        logf("WinHttpConnect (download) failed: %lu", GetLastError());
         WinHttpCloseHandle(hSession);
         return;
     }
-
-    logf("Download request path: %s", fullPath.c_str());
     std::wstring wpath(fullPath.begin(), fullPath.end());
-
-    // Determine if HTTPS is needed
     DWORD dwFlags = 0;
     if (downloadUrl.find("https://") == 0)
-    {
         dwFlags |= WINHTTP_FLAG_SECURE;
-    }
-
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath.c_str(), NULL, NULL, NULL, dwFlags);
     if (!hRequest)
     {
-        logf("WinHttpOpenRequest (download) failed: %lu", GetLastError());
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return;
     }
-
-    // Ignore SSL certificate errors for self-signed certs in dev
     if (downloadUrl.find("https://") == 0)
     {
         DWORD dwCertFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
@@ -732,49 +807,22 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
                             SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
         WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwCertFlags, sizeof(dwCertFlags));
     }
-
-    if (!WinHttpSendRequest(hRequest, NULL, 0, NULL, 0, 0, 0))
+    if (!WinHttpSendRequest(hRequest, NULL, 0, NULL, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, NULL))
     {
-        logf("WinHttpSendRequest (download) failed: %lu", GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return;
     }
-
-    if (!WinHttpReceiveResponse(hRequest, NULL))
-    {
-        logf("WinHttpReceiveResponse (download) failed: %lu", GetLastError());
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
-        return;
-    }
-
-    DWORD dwStatusCode = 0;
-    DWORD dwSize = sizeof(dwStatusCode);
-    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &dwStatusCode, &dwSize, NULL))
-    {
-        if (dwStatusCode != 200)
-        {
-            logf("Download failed: HTTP %d", dwStatusCode);
-            WinHttpCloseHandle(hRequest);
-            WinHttpCloseHandle(hConnect);
-            WinHttpCloseHandle(hSession);
-            return;
-        }
-    }
-
     HANDLE hFile = CreateFileA(tmpPath.c_str(), GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
     if (hFile == INVALID_HANDLE_VALUE)
     {
-        logf("CreateFile (tmp) failed: %lu", GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return;
     }
-
     char buffer[4096];
     DWORD bytesRead = 0;
     while (WinHttpReadData(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0)
@@ -783,66 +831,54 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
         WriteFile(hFile, buffer, bytesRead, &written, NULL);
     }
     CloseHandle(hFile);
-
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
 
-    // Verify SHA256
     std::string hash = sha256File(tmpPath);
     if (hash.empty() || hash != sha256)
     {
-        logf("SHA256 mismatch! Expected: %s, Got: %s", sha256.c_str(), hash.c_str());
+        logf("SHA256 mismatch (expected %s, got %s)", sha256.c_str(), hash.c_str());
         DeleteFileA(tmpPath.c_str());
         return;
     }
 
-    // Replace executable
+    // Перед заменой файла убиваем worker (иначе exe залочен либо worker будет старой версии)
+    stopRDPWorker();
+
     std::string oldPath = exePath + ".old";
-    // Delete existing .old file if present
     DeleteFileA(oldPath.c_str());
     if (MoveFileA(exePath.c_str(), oldPath.c_str()))
     {
         if (MoveFileA(tmpPath.c_str(), exePath.c_str()))
         {
-            log("Update successful, starting new version...");
+            log("Update successful, restarting service...");
 
-            // Send telemetry with new version
             std::string telemetryBody = "{\"exe_version\":\"" + newBuild + "\"}";
             std::string dummy;
             int code;
-            postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token, telemetryBody, dummy, code);
+            postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token,
+                     telemetryBody, dummy, code);
 
-            // Schedule a service restart via a detached process
-            // This avoids SCM conflicts when restarting from within the service
             STARTUPINFOA si = {0};
             si.cb = sizeof(si);
             si.dwFlags = STARTF_USESHOWWINDOW;
             si.wShowWindow = SW_HIDE;
             PROCESS_INFORMATION pi = {0};
-
-            // Command: wait 2 seconds then restart service
             char cmd[MAX_PATH * 2];
-            sprintf_s(cmd, sizeof(cmd), "cmd.exe /c \"timeout /t 2 /nobreak >nul && sc start SystemMonitoringAgent\"");
-
+            sprintf_s(cmd, sizeof(cmd),
+                      "cmd.exe /c \"timeout /t 2 /nobreak >nul && sc start SystemMonitoringAgent\"");
             if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
             {
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
                 log("Scheduled service restart in 2 seconds");
             }
-            else
-            {
-                logf("Failed to schedule restart: %lu", GetLastError());
-            }
-
-            // Give time for the scheduled restart to execute
             Sleep(3000);
-            ExitProcess(0); // Clean exit
+            ExitProcess(0);
         }
         else
         {
-            // Restore old file
             MoveFileA(oldPath.c_str(), exePath.c_str());
             log("Update failed: cannot move new exe");
         }
@@ -860,10 +896,9 @@ void mainLogic()
 {
     logf("Agent started %s", buildSlug.c_str());
     logf("Server URL: %s", serverURL.c_str());
-
     if (serverURL.empty())
     {
-        log("ERROR: serverURL is empty!");
+        log("ERROR: serverURL is empty");
         return;
     }
 
@@ -877,15 +912,12 @@ void mainLogic()
 
     std::string uuid, token;
 
-    // Registration
+    // === REGISTRATION ===
     for (;;)
     {
         if (g_stopRequested)
             return;
-
         std::string url = serverURL + "/api/agent/register";
-        logf("Registering at: %s", url.c_str());
-
         std::string body = "{\"name_pc\":\"" + jsonEscape(std::string(hostname)) + "\","
                                                                                    "\"machine_uid\":\"" +
                            jsonEscape(machineUID) + "\","
@@ -893,178 +925,128 @@ void mainLogic()
                            jsonEscape(buildSlug) + "\","
                                                    "\"external_ip\":\"" +
                            jsonEscape(getExternalIP()) + "\"}";
-
-        logf("Register body: %s", body.c_str());
-
         std::string responseBody;
-        int statusCode;
-
-        if (postJSON(url, body, responseBody, statusCode))
-        {
-            logf("Register response status: %d", statusCode);
-            logf("Register response body: %s", responseBody.c_str());
-        }
-        else
-        {
-            log("Register HTTP request failed");
-        }
-
+        int statusCode = 0;
+        postJSON(url, body, responseBody, statusCode);
         if (statusCode == 200)
         {
             size_t uuidPos = responseBody.find("\"agent_uuid\":\"");
             size_t tokenPos = responseBody.find("\"token\":\"");
             if (uuidPos != std::string::npos && tokenPos != std::string::npos)
             {
-                uuidPos += 14; // length of "agent_uuid":"
-                tokenPos += 9; // length of "token":"
+                uuidPos += 14;
+                tokenPos += 9;
                 size_t uuidEnd = responseBody.find("\"", uuidPos);
                 size_t tokenEnd = responseBody.find("\"", tokenPos);
                 if (uuidEnd != std::string::npos && tokenEnd != std::string::npos)
                 {
                     uuid = responseBody.substr(uuidPos, uuidEnd - uuidPos);
                     token = responseBody.substr(tokenPos, tokenEnd - tokenPos);
-                    logf("Registered! UUID: %s, Token: %s", uuid.c_str(), token.c_str());
+                    logf("Registered: UUID=%s", uuid.c_str());
                     break;
                 }
             }
         }
-
-        log("Registration failed, retrying in 10 seconds...");
+        log("Registration failed, retrying in 10s...");
         for (int i = 0; i < 10 && !g_stopRequested; i++)
-        {
             std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
     }
-
     if (g_stopRequested)
         return;
 
-    // Telemetry
-    log("Sending telemetry...");
-    TelemetryData telemetry = collectTelemetry();
-    telemetry.system = buildSlug;
-
-    std::string telemetryBody = "{\"system\":\"" + telemetry.system + "\","
-                                                                      "\"user_name\":\"" +
-                                jsonEscape(telemetry.userName) + "\","
-                                                                 "\"ip_addr\":\"" +
-                                telemetry.ipAddr + "\","
-                                                   "\"external_ip\":\"" +
-                                telemetry.externalIP + "\","
-                                                       "\"total_memory\":" +
-                                std::to_string(telemetry.totalMemory) + ","
-                                                                        "\"available_memory\":" +
-                                std::to_string(telemetry.availableMemory) + ","
-                                                                            "\"exe_version\":\"" +
-                                buildSlug + "\"}";
-
-    std::string responseBody;
-    int statusCode;
-    postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token, telemetryBody, responseBody, statusCode);
-
-    // Initialize RDP Agent
-    RDPConfig rdp_cfg;
-    rdp_cfg.server_host = serverURL.empty() ? "localhost" : [&]()
+    // === INITIAL TELEMETRY ===
     {
-        std::string temp = serverURL;
-        if (temp.find("http://") == 0)
-            temp = temp.substr(7);
-        else if (temp.find("https://") == 0)
-            temp = temp.substr(8);
-        size_t slash = temp.find('/');
-        if (slash != std::string::npos)
-            temp = temp.substr(0, slash);
-        size_t colon = temp.find(':');
-        if (colon != std::string::npos)
-            temp = temp.substr(0, colon);
-        return temp;
-    }();
-    rdp_cfg.server_port = serverURL.find("https://") != std::string::npos ? 443 : 80;
-    rdp_cfg.agent_id = uuid;
-    rdp_cfg.verify_cert = false; // localhost, allow self-signed
-    rdp_cfg.ffmpeg_path = getFFmpegPath();
+        log("Sending telemetry...");
+        TelemetryData t = collectTelemetry();
+        std::string tb = "{\"system\":\"" + buildSlug + "\","
+                                                        "\"user_name\":\"" +
+                         jsonEscape(t.userName) + "\","
+                                                  "\"ip_addr\":\"" +
+                         t.ipAddr + "\","
+                                    "\"external_ip\":\"" +
+                         t.externalIP + "\","
+                                        "\"total_memory\":" +
+                         std::to_string(t.totalMemory) + ","
+                                                         "\"available_memory\":" +
+                         std::to_string(t.availableMemory) + ","
+                                                             "\"exe_version\":\"" +
+                         buildSlug + "\"}";
+        std::string rb;
+        int rc;
+        postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token, tb, rb, rc);
+    }
 
-    RDPAgent *rdp_agent = new RDPAgent(rdp_cfg);
-    log("Starting RDP Agent...");
-    rdp_agent->start();
-    logf("RDP Agent started for agent_id: %s", uuid.c_str());
-    std::cout.flush();
-    if (logFile.is_open()) logFile.flush();
+    // === CONFIGURE RDP WORKER ===
+    {
+        std::string rdp_host, rdp_path, rdp_query;
+        int rdp_port;
+        parseUrl(serverURL, rdp_host, rdp_port, rdp_path, rdp_query);
+        g_rdp_server_host = rdp_host;
+        g_rdp_server_port = rdp_port;
+        g_rdp_agent_id = uuid;
+        g_rdp_verify_cert = false; // self-signed в dev
+        logf("RDP target: %s:%d agent_id=%s verify=%d",
+             g_rdp_server_host.c_str(), g_rdp_server_port,
+             g_rdp_agent_id.c_str(), g_rdp_verify_cert);
+    }
 
-    // Main loop
+    std::thread watcherThread(rdpWorkerWatcher);
+
+    // === HEARTBEAT LOOP ===
     log("Entering main loop...");
     while (!g_stopRequested)
     {
-        // Heartbeat every 10 seconds
         for (int i = 0; i < 10 && !g_stopRequested; i++)
-        {
             std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-
         if (g_stopRequested)
             break;
 
-        log("Sending heartbeat...");
         std::string dummy;
         int code;
-        std::string hbBody = "{}";
-        postJSON(serverURL + "/api/agent/heartbeat?uuid=" + uuid + "&token=" + token, hbBody, dummy, code);
+        postJSON(serverURL + "/api/agent/heartbeat?uuid=" + uuid + "&token=" + token,
+                 "{}", dummy, code);
 
-        // Parse telemetry_mode from heartbeat response (dummy contains response)
         size_t modePos = dummy.find("\"telemetry_mode\":\"");
         if (modePos != std::string::npos)
         {
-            modePos += 18; // length of "telemetry_mode":"
+            modePos += 18;
             size_t modeEnd = dummy.find("\"", modePos);
             if (modeEnd != std::string::npos)
-            {
                 g_telemetryMode = dummy.substr(modePos, modeEnd - modePos);
-                logf("Telemetry mode: %s", g_telemetryMode.c_str());
-            }
         }
 
-        // Send telemetry if mode is "full"
         if (g_telemetryMode == "full" && !g_stopRequested)
         {
-            log("Sending telemetry (full mode)...");
-            TelemetryData telemetry = collectTelemetry();
-            telemetry.system = buildSlug;
-
-            std::string telemetryBody = "{\"system\":\"" + telemetry.system + "\","
-                                                                              "\"user_name\":\"" +
-                                        jsonEscape(telemetry.userName) + "\","
-                                                                         "\"ip_addr\":\"" +
-                                        telemetry.ipAddr + "\","
-                                                           "\"external_ip\":\"" +
-                                        telemetry.externalIP + "\","
-                                                               "\"total_memory\":" +
-                                        std::to_string(telemetry.totalMemory) + ","
-                                                                                "\"available_memory\":" +
-                                        std::to_string(telemetry.availableMemory) + ","
-                                                                                    "\"exe_version\":\"" +
-                                        buildSlug + "\"}";
-            postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token, telemetryBody, dummy, code);
+            TelemetryData t = collectTelemetry();
+            std::string tb = "{\"system\":\"" + buildSlug + "\","
+                                                            "\"user_name\":\"" +
+                             jsonEscape(t.userName) + "\","
+                                                      "\"ip_addr\":\"" +
+                             t.ipAddr + "\","
+                                        "\"external_ip\":\"" +
+                             t.externalIP + "\","
+                                            "\"total_memory\":" +
+                             std::to_string(t.totalMemory) + ","
+                                                             "\"available_memory\":" +
+                             std::to_string(t.availableMemory) + ","
+                                                                 "\"exe_version\":\"" +
+                             buildSlug + "\"}";
+            postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token,
+                     tb, dummy, code);
         }
 
-        // Update check every 60 seconds
         for (int i = 0; i < 50 && !g_stopRequested; i++)
-        {
             std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-
         if (!g_stopRequested)
-        {
             checkForUpdate(uuid, token);
-        }
     }
 
-    // Cleanup
-    if (rdp_agent)
-    {
-        rdp_agent->stop();
-        delete rdp_agent;
-        logf("RDP Agent stopped");
-    }
+    // === CLEANUP ===
+    log("Cleaning up...");
+    stopRDPWorker();
+    if (watcherThread.joinable())
+        watcherThread.join();
+    log("Main logic finished");
 }
 
 // ==================== SERVICE ====================
@@ -1089,32 +1071,26 @@ VOID WINAPI serviceMain(DWORD argc, LPWSTR *argv)
     serviceStatus.dwControlsAccepted = SERVICE_ACCEPT_STOP;
     serviceStatus.dwWin32ExitCode = 0;
     serviceStatus.dwServiceSpecificExitCode = 0;
-
     serviceHandle = RegisterServiceCtrlHandlerW(L"SystemMonitoringAgent", serviceCtrlHandler);
     if (!serviceHandle)
     {
         log("RegisterServiceCtrlHandler failed");
         return;
     }
-
     SetServiceStatus(serviceHandle, &serviceStatus);
-
     stopEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!stopEvent)
     {
-        log("CreateEvent failed");
         serviceStatus.dwCurrentState = SERVICE_STOPPED;
         SetServiceStatus(serviceHandle, &serviceStatus);
         return;
     }
-
     serviceStatus.dwCurrentState = SERVICE_RUNNING;
     SetServiceStatus(serviceHandle, &serviceStatus);
 
     log("Service main started");
     logf("Built-in Server URL: %s", serverURL.c_str());
     logf("Built-in Build Slug: %s", buildSlug.c_str());
-    log("Starting main logic with embedded parameters (no CLI args needed)");
     mainLogic();
 
     CloseHandle(stopEvent);
@@ -1126,8 +1102,6 @@ VOID WINAPI serviceMain(DWORD argc, LPWSTR *argv)
 bool installService()
 {
     std::string exePath = getExePath();
-    logf("Installing service, path: %s", exePath.c_str());
-
     SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
     if (!scm)
     {
@@ -1145,18 +1119,15 @@ bool installService()
         CloseServiceHandle(scm);
         return false;
     }
-
-    // Setup recovery options: restart on failure
     SERVICE_FAILURE_ACTIONS actions = {0};
-    SC_ACTION action = {SC_ACTION_RESTART, 1000}; // Restart after 1 second
+    SC_ACTION action = {SC_ACTION_RESTART, 1000};
     actions.cActions = 1;
     actions.lpsaActions = &action;
-    actions.dwResetPeriod = 86400; // Reset failure count after 1 day
+    actions.dwResetPeriod = 86400;
     ChangeServiceConfig2A(svc, SERVICE_CONFIG_FAILURE_ACTIONS, &actions);
-
     CloseServiceHandle(svc);
     CloseServiceHandle(scm);
-    log("Service installed successfully with auto-restart");
+    log("Service installed with auto-restart");
     return true;
 }
 
@@ -1173,18 +1144,56 @@ bool isServiceInstalled()
     return exists;
 }
 
+// ==================== MAIN / DISPATCHER ====================
+
 int main(int argc, char *argv[])
 {
-    setupFileLogger();
+    // ---- parse args ----
+    bool worker_mode = false;
+    std::string cli_server, cli_id;
+    int cli_port = 443;
+    bool cli_insecure = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string a = argv[i];
+        if (a == "--rdp-worker")
+            worker_mode = true;
+        else if (a == "--insecure")
+            cli_insecure = true;
+        else if (a.rfind("--server=", 0) == 0)
+            cli_server = a.substr(9);
+        else if (a.rfind("--port=", 0) == 0)
+        {
+            try
+            {
+                cli_port = std::stoi(a.substr(7));
+            }
+            catch (...)
+            {
+            }
+        }
+        else if (a.rfind("--id=", 0) == 0)
+            cli_id = a.substr(5);
+    }
+
+    // ---- mode dispatch ----
+    if (worker_mode)
+    {
+        // worker пишет в отдельный лог, чтобы не смешивать с service-логом
+        setupFileLogger("agent_rdp.log");
+        log("=== Starting in RDP-WORKER mode ===");
+        logf("worker args: server=%s port=%d id=%s verify=%d",
+             cli_server.c_str(), cli_port, cli_id.c_str(), !cli_insecure);
+        return run_rdp_worker(cli_server, cli_port, cli_id, !cli_insecure);
+    }
+
+    // ---- service/install mode ----
+    setupFileLogger("agent.log");
     log("Agent started as console app");
 
     if (!isServiceInstalled())
     {
-        if (!installService())
-        {
-            log("Warning: Could not install service");
-        }
-        else
+        if (installService())
         {
             SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
             if (scm)
@@ -1198,13 +1207,16 @@ int main(int argc, char *argv[])
                 CloseServiceHandle(scm);
             }
         }
+        else
+        {
+            log("Warning: Could not install service");
+        }
         return 0;
     }
 
     SERVICE_TABLE_ENTRYW table[] = {
         {(LPWSTR)L"SystemMonitoringAgent", serviceMain},
         {NULL, NULL}};
-
     log("Starting service dispatcher...");
     StartServiceCtrlDispatcherW(table);
     log("Service dispatcher exited");
