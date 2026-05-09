@@ -2,7 +2,8 @@
 <div class="bottom-panel" {% if agent %}data-agent-id="{{ agent.id }}"{% endif %}>
   <!-- Store agent ID for JavaScript access -->
   <script>
-    window.currentAgentId = {% if agent %}{{ agent.id }}{% else %}null{% endif %};
+    const bottomPanel = document.querySelector('.bottom-panel');
+    window.currentAgentId = bottomPanel ? (bottomPanel.getAttribute('data-agent-id') || null) : null;
     console.log("[bottom_panel] Set window.currentAgentId =", window.currentAgentId);
   </script>
   <!-- TOOLBAR -->
