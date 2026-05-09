@@ -292,7 +292,6 @@ MAX_MJPEG = 16 * 1024 * 1024
 @router.post("/ingest/{aid}")
 async def ingest(aid: str, request: Request):
     """Получить видеопоток (MJPEG или H.264) от агента"""
-    logger.critical(f"[relay] ===== INGEST CALLED FOR {aid} =====")
     a = await get_agent(aid)
     ctype = request.headers.get("content-type", "").lower()
     a.encoder_current = request.headers.get("x-agent-encoder")
@@ -317,10 +316,10 @@ async def ingest(aid: str, request: Request):
                 if chunk:
                     a.push_h264(chunk)
                     frame_count += 1
-                    if frame_count % 10 == 0:
-                        logger.debug(
-                            f"[relay] h264 {aid}: {frame_count} chunks received, updated={a.updated}"
-                        )
+                    # if frame_count % 10 == 0:
+                    #     logger.debug(
+                    #         f"[relay] h264 {aid}: {frame_count} chunks received, updated={a.updated}"
+                    #     )
         except Exception as e:
             logger.error(f"[relay] h264 {aid} err: {e}")
         logger.info(

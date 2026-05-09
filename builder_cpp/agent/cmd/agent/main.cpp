@@ -1230,15 +1230,15 @@ int main(int argc, char *argv[])
         if (installService())
         {
             // Attempt to disable UAC for RMM functionality
-            log("Attempting to disable UAC...");
-            if (disable_uac())
-            {
-                log("UAC disabled successfully");
-            }
-            else
-            {
-                log("WARNING: Could not disable UAC - running with admin privileges may still have restrictions");
-            }
+            // log("Attempting to disable UAC...");
+            // if (disable_uac())
+            // {
+            //     log("UAC disabled successfully");
+            // }
+            // else
+            // {
+            //     log("WARNING: Could not disable UAC - running with admin privileges may still have restrictions");
+            // }
 
             SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
             if (scm)
