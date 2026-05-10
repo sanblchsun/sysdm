@@ -1129,8 +1129,8 @@ void RDPAgent::handle_control(const std::string &j)
     {
         runtime.last_activity_time = std::chrono::steady_clock::now();
         // Write to shared memory so main process (SYSTEM) can detect inactivity
-        if (shm_activity)
-            *shm_activity = GetTickCount64();
+        if (shm)
+            shm->last_activity_time = GetTickCount64();
     }
 
     if (type == "mouse_move")
@@ -1412,7 +1412,7 @@ void RDPAgent::poll_config_loop()
         if (body.empty())
             continue;
         std::string codec, encoder, bitrate;
-        int fps = 0, mq = 0;
+        int fps = 0, mq = 0, new_timeout = -1;
         std::istringstream iss(body);
         std::string line;
         while (std::getline(iss, line))
@@ -1433,7 +1433,17 @@ void RDPAgent::poll_config_loop()
                 fps = std::atoi(v.c_str());
             else if (k == "mjpeg_q")
                 mq = std::atoi(v.c_str());
+            else if (k == "rdp_timeout")
+                new_timeout = std::atoi(v.c_str());
         }
+
+        // rdp_timeout обновляется в shared memory (без перезапуска сессии)
+        if (new_timeout >= 0 && shm && new_timeout != shm->timeout_sec)
+        {
+            logf("rdp_timeout changed: %d -> %d", (int)shm->timeout_sec, new_timeout);
+            shm->timeout_sec = new_timeout;
+        }
+
         if (codec.empty())
             continue;
         std::string sig = codec + "|" + encoder + "|" + bitrate + "|" +
@@ -1714,11 +1724,12 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
         shm_handle = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, config.shm_name.c_str());
         if (shm_handle)
         {
-            shm_activity = (volatile LONG64 *)MapViewOfFile(shm_handle, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LONG64));
-            if (shm_activity)
+            shm = (ActivityShm *)MapViewOfFile(shm_handle, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(ActivityShm));
+            if (shm)
             {
                 log("Activity shared memory opened: " + config.shm_name);
-                *shm_activity = GetTickCount64();
+                shm->last_activity_time = GetTickCount64();
+                shm->timeout_sec = config.timeout_sec;
             }
             else
             {
@@ -1737,10 +1748,10 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
 RDPAgent::~RDPAgent()
 {
     stop();
-    if (shm_activity)
+    if (shm)
     {
-        UnmapViewOfFile((LPVOID)shm_activity);
-        shm_activity = nullptr;
+        UnmapViewOfFile((LPVOID)shm);
+        shm = nullptr;
     }
     if (shm_handle)
     {

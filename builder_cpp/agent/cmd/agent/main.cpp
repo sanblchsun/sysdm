@@ -59,7 +59,7 @@ std::atomic<int> g_rdp_worker_timeout{0};
 
 // Shared memory for activity monitoring (created by SYSTEM process, read by worker)
 static HANDLE g_shm_handle = NULL;
-static volatile LONG64 *g_shm_activity = NULL;
+static ActivityShm *g_shm = NULL;
 static std::string g_shm_name;
 static std::mutex g_shm_m;
 
@@ -624,10 +624,10 @@ bool spawnRDPWorker()
         // Clean up any previous shared memory
         if (g_shm_handle)
         {
-            if (g_shm_activity)
+            if (g_shm)
             {
-                UnmapViewOfFile((LPVOID)g_shm_activity);
-                g_shm_activity = nullptr;
+                UnmapViewOfFile((LPVOID)g_shm);
+                g_shm = nullptr;
             }
             CloseHandle(g_shm_handle);
             g_shm_handle = NULL;
@@ -638,14 +638,17 @@ bool spawnRDPWorker()
         SetSecurityDescriptorDacl(&sd, TRUE, NULL, FALSE);
         SECURITY_ATTRIBUTES sa{sizeof(sa), &sd, FALSE};
         g_shm_handle = CreateFileMappingA(INVALID_HANDLE_VALUE, &sa,
-                                          PAGE_READWRITE, 0, sizeof(LONG64),
+                                          PAGE_READWRITE, 0, sizeof(ActivityShm),
                                           g_shm_name.c_str());
         if (g_shm_handle)
         {
-            g_shm_activity = (volatile LONG64 *)MapViewOfFile(
-                g_shm_handle, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LONG64));
-            if (g_shm_activity)
-                *g_shm_activity = GetTickCount64();
+            g_shm = (ActivityShm *)MapViewOfFile(
+                g_shm_handle, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(ActivityShm));
+            if (g_shm)
+            {
+                g_shm->last_activity_time = GetTickCount64();
+                g_shm->timeout_sec = 0;
+            }
             else
                 log("MapViewOfFile failed for activity shm");
         }
@@ -740,10 +743,10 @@ static void kill_ffmpeg()
 static void close_activity_shm()
 {
     std::lock_guard<std::mutex> slk(g_shm_m);
-    if (g_shm_activity)
+    if (g_shm)
     {
-        UnmapViewOfFile((LPVOID)g_shm_activity);
-        g_shm_activity = nullptr;
+        UnmapViewOfFile((LPVOID)g_shm);
+        g_shm = nullptr;
     }
     if (g_shm_handle)
     {
@@ -799,19 +802,22 @@ void controlCommandLoop()
                 else
                 {
                     // Worker is running — проверяем таймаут неактивности
-                    int to = g_rdp_worker_timeout.load();
-                    if (to > 0 && g_shm_activity)
+                    if (g_shm)
                     {
-                        LONG64 now = GetTickCount64();
-                        LONG64 last = *g_shm_activity;
-                        if (last > 0)
+                        int to = g_shm->timeout_sec;
+                        if (to > 0)
                         {
-                            LONG64 idle_sec = (now - last) / 1000;
-                            if (idle_sec >= to)
+                            LONG64 now = GetTickCount64();
+                            LONG64 last = g_shm->last_activity_time;
+                            if (last > 0)
                             {
-                                logf("Inactivity timeout: %llds idle (limit %ds) — stopping worker",
-                                     (long long)idle_sec, to);
-                                need_stop = true;
+                                LONG64 idle_sec = (now - last) / 1000;
+                                if (idle_sec >= to)
+                                {
+                                    logf("Inactivity timeout: %llds idle (limit %ds) — stopping worker",
+                                         (long long)idle_sec, to);
+                                    need_stop = true;
+                                }
                             }
                         }
                     }

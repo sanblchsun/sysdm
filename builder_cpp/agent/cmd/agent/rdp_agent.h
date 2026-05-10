@@ -26,6 +26,13 @@ extern bool disable_uac();  // UAC control (реализуется в main.cpp)
 
 // ============ INTERNAL STRUCTURES ============
 
+// Shared memory between main process (SYSTEM) and RDP worker (user session)
+struct ActivityShm
+{
+    volatile LONG64 last_activity_time; // written by worker on input events
+    volatile LONG timeout_sec;          // written by worker from config poll
+};
+
 struct RDPConfig
 {
     std::string server_host = "127.0.0.1";
@@ -121,7 +128,7 @@ private:
 
     // Shared memory for activity tracking (written by worker, read by main process)
     HANDLE shm_handle = nullptr;
-    volatile LONG64 *shm_activity = nullptr;
+    ActivityShm *shm = nullptr;
 
     // TLS (internal)
     static bool tls_handshake(TlsConn *c, const std::string &host, bool verify_cert);
