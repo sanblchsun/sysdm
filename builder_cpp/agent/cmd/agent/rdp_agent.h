@@ -30,7 +30,7 @@ extern bool disable_uac();  // UAC control (реализуется в main.cpp)
 struct ActivityShm
 {
     volatile LONG64 last_activity_time; // written by worker on input events
-    volatile LONG timeout_sec;          // written by worker from config poll
+    volatile LONG timeout_min;          // written by worker from config poll
 };
 
 struct RDPConfig
@@ -51,7 +51,7 @@ struct RDPConfig
     std::string input = "desktop";
     std::string video_size = "";
     int config_poll_ms = 2000;
-    int timeout_sec = 0; // 0 = no inactivity timeout
+    int timeout_min = 0; // 0 = no inactivity timeout (minutes)
     std::string shm_name; // shared memory name for activity tracking
 };
 
@@ -73,7 +73,7 @@ struct RDPRuntime
     std::string last_ffmpeg_error;
 
     // Inactivity timeout tracking (shared with parent process)
-    int timeout_sec = 0;
+    int timeout_min = 0;
     std::chrono::steady_clock::time_point last_activity_time;
 };
 
@@ -199,7 +199,7 @@ private:
 // Блокирует поток до завершения процесса (TerminateProcess извне).
 int run_rdp_worker(const std::string &host, int port,
                    const std::string &agent_id, bool verify_cert,
-                   int timeout_sec = 0,
+                   int timeout_min = 0,
                    const std::string &shm_name = "");
 
 #endif // RDP_AGENT_H

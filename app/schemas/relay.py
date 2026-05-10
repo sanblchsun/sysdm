@@ -11,7 +11,7 @@ class RelayConfigBody(BaseModel):
     bitrate: Optional[str] = Field(None, pattern=r"^\d+[KMkm]?$")
     fps: Optional[int] = Field(None, ge=1, le=120)
     mjpeg_q: Optional[int] = Field(None, ge=2, le=31)
-    rdp_timeout: Optional[int] = Field(None, ge=0, le=86400)
+    rdp_timeout: Optional[int] = Field(None, ge=0, le=1440)
 
 
 class AgentConfigResponse(BaseModel):

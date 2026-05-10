@@ -1438,10 +1438,10 @@ void RDPAgent::poll_config_loop()
         }
 
         // rdp_timeout обновляется в shared memory (без перезапуска сессии)
-        if (new_timeout >= 0 && shm && new_timeout != shm->timeout_sec)
+        if (new_timeout >= 0 && shm && new_timeout != shm->timeout_min)
         {
-            logf("rdp_timeout changed: %d -> %d", (int)shm->timeout_sec, new_timeout);
-            shm->timeout_sec = new_timeout;
+            logf("rdp_timeout changed: %d -> %d min", (int)shm->timeout_min, new_timeout);
+            shm->timeout_min = new_timeout;
         }
 
         if (codec.empty())
@@ -1713,10 +1713,10 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
     runtime.bitrate = config.bitrate;
     runtime.framerate = config.framerate;
     runtime.mjpeg_q = config.mjpeg_q;
-    runtime.timeout_sec = config.timeout_sec;
+    runtime.timeout_min = config.timeout_min;
     runtime.last_activity_time = std::chrono::steady_clock::now();
     log("RDPAgent created: agent_id=" + config.agent_id +
-        " timeout=" + std::to_string(config.timeout_sec));
+        " timeout=" + std::to_string(config.timeout_min) + " min");
 
     // Open shared memory for activity tracking (created by parent process)
     if (!config.shm_name.empty())
@@ -1729,7 +1729,7 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
             {
                 log("Activity shared memory opened: " + config.shm_name);
                 shm->last_activity_time = GetTickCount64();
-                shm->timeout_sec = config.timeout_sec;
+                shm->timeout_min = config.timeout_min;
             }
             else
             {
@@ -1879,7 +1879,7 @@ bool RDPAgent::is_consent_exe_running()
 // ============ USER-SESSION WORKER ENTRYPOINT ============
 int run_rdp_worker(const std::string &host, int port,
                    const std::string &agent_id, bool verify_cert,
-                   int timeout_sec, const std::string &shm_name)
+                   int timeout_min, const std::string &shm_name)
 {
     // Путь к ffmpeg рядом с собственным exe.
     char path[MAX_PATH] = {0};
@@ -1895,11 +1895,11 @@ int run_rdp_worker(const std::string &host, int port,
     cfg.agent_id = agent_id;
     cfg.verify_cert = verify_cert;
     cfg.ffmpeg_path = ffmpeg;
-    cfg.timeout_sec = timeout_sec;
+    cfg.timeout_min = timeout_min;
     cfg.shm_name = shm_name;
 
-    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s timeout=%d shm=%s",
-         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str(), timeout_sec, shm_name.c_str());
+    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s timeout=%d min shm=%s",
+         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str(), timeout_min, shm_name.c_str());
 
     RDPAgent agent(cfg);
     agent.start();

@@ -227,7 +227,7 @@
       <label data-role="h264-only">br <input name="bitrate" value="4M"></label>
       <label data-role="mjpeg-only">q <input name="mjpeg_q" value="4" type="number" min="2" max="31"></label>
       <label>fps <input name="fps" value="30" type="number" min="1" max="120"></label>
-      <label title="Таймаут неактивности (сек), 0 = отключен">timeout <input name="rdp_timeout" value="0" type="number" min="0" max="86400"></label>
+      <label title="Таймаут неактивности (мин), 0 = отключен">timeout <input name="rdp_timeout" value="0" type="number" min="0" max="1440"></label>
       <button type="button">Применить</button>
     </div>`;
         const name = el.querySelector("b");

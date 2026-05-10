@@ -647,7 +647,7 @@ bool spawnRDPWorker()
             if (g_shm)
             {
                 g_shm->last_activity_time = GetTickCount64();
-                g_shm->timeout_sec = 0;
+                g_shm->timeout_min = 0;
             }
             else
                 log("MapViewOfFile failed for activity shm");
@@ -665,9 +665,9 @@ bool spawnRDPWorker()
          << " --id=" << g_rdp_agent_id;
     if (!g_rdp_verify_cert)
         args << " --insecure";
-    int timeout = g_rdp_worker_timeout.load();
-    if (timeout > 0)
-        args << " --timeout=" << timeout;
+    int timeout_min = g_rdp_worker_timeout.load();
+    if (timeout_min > 0)
+        args << " --timeout=" << timeout_min;
     if (!g_shm_name.empty())
         args << " --shm=" << g_shm_name;
     std::string cmdline = args.str();
@@ -804,7 +804,7 @@ void controlCommandLoop()
                     // Worker is running — проверяем таймаут неактивности
                     if (g_shm)
                     {
-                        int to = g_shm->timeout_sec;
+                        int to = g_shm->timeout_min;
                         if (to > 0)
                         {
                             LONG64 now = GetTickCount64();
@@ -812,9 +812,9 @@ void controlCommandLoop()
                             if (last > 0)
                             {
                                 LONG64 idle_sec = (now - last) / 1000;
-                                if (idle_sec >= to)
+                                if (idle_sec >= to * 60)
                                 {
-                                    logf("Inactivity timeout: %llds idle (limit %ds) — stopping worker",
+                                    logf("Inactivity timeout: %llds idle (limit %dmin) — stopping worker",
                                          (long long)idle_sec, to);
                                     need_stop = true;
                                 }

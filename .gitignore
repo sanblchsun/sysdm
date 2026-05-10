@@ -1,4 +1,6 @@
 # Python
+sysdm_setup.exe
+build/
 dist/agents/
 migrations/versions/
 certbot/
