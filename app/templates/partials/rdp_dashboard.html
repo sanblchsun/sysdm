@@ -370,9 +370,9 @@
           return;
         }
 
-        // Фильтруем агентов по выбранным в таблице
+        // Фильтруем агентов по выбранным в таблице и только живых
         const selected = getSelectedAgents();
-        const filteredAgents = data.agents.filter((a) => selected[a.id]);
+        const filteredAgents = data.agents.filter((a) => selected[a.id] && a.alive);
 
         const grid = filteredAgents.length ? ensureGrid() : null;
         const ids = new Set(filteredAgents.map((a) => a.id));
