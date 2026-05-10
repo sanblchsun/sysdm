@@ -227,6 +227,7 @@
       <label data-role="h264-only">br <input name="bitrate" value="4M"></label>
       <label data-role="mjpeg-only">q <input name="mjpeg_q" value="4" type="number" min="2" max="31"></label>
       <label>fps <input name="fps" value="30" type="number" min="1" max="120"></label>
+      <label title="Таймаут неактивности (сек), 0 = отключен">timeout <input name="rdp_timeout" value="0" type="number" min="0" max="86400"></label>
       <button type="button">Применить</button>
     </div>`;
         const name = el.querySelector("b");
@@ -264,6 +265,7 @@
             bitrate: sel("bitrate").value,
             fps: parseInt(sel("fps").value, 10),
             mjpeg_q: parseInt(sel("mjpeg_q").value, 10),
+            rdp_timeout: parseInt(sel("rdp_timeout").value, 10),
           };
           try {
             await apiPost(
@@ -347,6 +349,7 @@
           c.sel("bitrate").value = t.bitrate || "4M";
           c.sel("fps").value = t.fps || 30;
           c.sel("mjpeg_q").value = t.mjpeg_q || 4;
+          c.sel("rdp_timeout").value = t.rdp_timeout != null ? t.rdp_timeout : 0;
           c.applyCodecVisibility();
         }
 

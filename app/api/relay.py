@@ -24,6 +24,7 @@ class AgentState:
         "bitrate_target",
         "fps_target",
         "mjpeg_q_target",
+        "rdp_timeout_target",
         "codec_current",
         "encoder_current",
         "bitrate_current",
@@ -44,6 +45,7 @@ class AgentState:
         self.bitrate_target = "4M"
         self.fps_target = 30
         self.mjpeg_q_target = 4
+        self.rdp_timeout_target = 0  # 0 = no timeout
 
         self.codec_current: Optional[str] = None
         self.encoder_current: Optional[str] = None
@@ -254,6 +256,7 @@ async def get_config(aid: str):
         f"bitrate={a.bitrate_target}\n"
         f"fps={a.fps_target}\n"
         f"mjpeg_q={a.mjpeg_q_target}\n"
+        f"rdp_timeout={a.rdp_timeout_target}\n"
     )
 
 
@@ -271,6 +274,8 @@ async def set_config(aid: str, body: RelayConfigBody):
         a.fps_target = body.fps
     if body.mjpeg_q is not None:
         a.mjpeg_q_target = body.mjpeg_q
+    if body.rdp_timeout is not None:
+        a.rdp_timeout_target = body.rdp_timeout
     return {
         "status": "ok",
         "target": {
@@ -279,6 +284,7 @@ async def set_config(aid: str, body: RelayConfigBody):
             "bitrate": a.bitrate_target,
             "fps": a.fps_target,
             "mjpeg_q": a.mjpeg_q_target,
+            "rdp_timeout": a.rdp_timeout_target,
         },
     }
 
@@ -478,6 +484,7 @@ async def list_agents() -> AgentsListResponse:
                     "bitrate": a.bitrate_target,
                     "fps": a.fps_target,
                     "mjpeg_q": a.mjpeg_q_target,
+                    "rdp_timeout": a.rdp_timeout_target,
                 },
                 current={
                     "codec": a.codec_current,
@@ -514,6 +521,7 @@ async def compat_get_config(aid: str):
         f"bitrate={a.bitrate_target}\n"
         f"fps={a.fps_target}\n"
         f"mjpeg_q={a.mjpeg_q_target}\n"
+        f"rdp_timeout={a.rdp_timeout_target}\n"
     )
 
 
@@ -531,6 +539,8 @@ async def compat_set_config(aid: str, body: RelayConfigBody):
         a.fps_target = body.fps
     if body.mjpeg_q is not None:
         a.mjpeg_q_target = body.mjpeg_q
+    if body.rdp_timeout is not None:
+        a.rdp_timeout_target = body.rdp_timeout
     return {
         "status": "ok",
         "target": {
@@ -539,6 +549,7 @@ async def compat_set_config(aid: str, body: RelayConfigBody):
             "bitrate": a.bitrate_target,
             "fps": a.fps_target,
             "mjpeg_q": a.mjpeg_q_target,
+            "rdp_timeout": a.rdp_timeout_target,
         },
     }
 
@@ -618,6 +629,7 @@ async def compat_list_agents() -> AgentsListResponse:
                     "bitrate": a.bitrate_target,
                     "fps": a.fps_target,
                     "mjpeg_q": a.mjpeg_q_target,
+                    "rdp_timeout": a.rdp_timeout_target,
                 },
                 current={
                     "codec": a.codec_current,

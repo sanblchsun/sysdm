@@ -16,6 +16,7 @@
 #include <atomic>
 #include <thread>
 #include <memory>
+#include <chrono>
 
 // ============ LOGGING (реализуется в main.cpp) ============
 extern void log(const char *msg);
@@ -43,6 +44,7 @@ struct RDPConfig
     std::string input = "desktop";
     std::string video_size = "";
     int config_poll_ms = 2000;
+    int timeout_sec = 0; // 0 = no inactivity timeout
 };
 
 struct RDPRuntime
@@ -58,12 +60,26 @@ struct RDPRuntime
     struct TlsConn *ctrl_conn = nullptr;
 
     // Retry logic for intermittent ffmpeg errors
-    int consecutive_ffmpeg_errors = 0;                            // счётчик ошибок подряд
-    std::chrono::steady_clock::time_point last_ffmpeg_error_time; // время последней ошибки
-    std::string last_ffmpeg_error;                                // описание последней ошибки
+    int consecutive_ffmpeg_errors = 0;
+    std::chrono::steady_clock::time_point last_ffmpeg_error_time;
+    std::string last_ffmpeg_error;
+
+    // Inactivity timeout tracking
+    int timeout_sec = 0;
+    std::chrono::steady_clock::time_point last_activity_time;
 };
 
-struct TlsConn;
+struct TlsConn
+{
+    SOCKET sock = INVALID_SOCKET;
+    CredHandle cred = {};
+    CtxtHandle ctx = {};
+    bool cred_ok = false;
+    bool ctx_ok = false;
+    SecPkgContext_StreamSizes sizes = {};
+    std::vector<uint8_t> raw;
+    std::vector<uint8_t> plain;
+};
 
 // ============ RDP AGENT CLASS ============
 
@@ -76,6 +92,7 @@ public:
     void start();
     void stop();
     bool isRunning() const;
+    bool hasInactivityTimeout() const;
 
     struct Status
     {
@@ -88,15 +105,22 @@ public:
     };
     Status getStatus() const;
 
+    // Public API used by main.cpp control command loop
+    static TlsConn *tls_connect(const std::string &host, int port, bool verify_cert);
+    static void tls_close(TlsConn *c);
+    static bool ws_handshake(TlsConn *c, const std::string &host, int port, const std::string &path);
+    static int ws_recv(TlsConn *c, std::vector<uint8_t> &payload);
+    static bool json_str(const std::string &j, const std::string &k, std::string &out);
+    static bool json_int(const std::string &j, const std::string &k, int &out);
+
 private:
     RDPConfig config;
     RDPRuntime runtime;
     std::vector<std::thread> threads;
     bool running = false;
+    std::atomic<bool> inactivity_timeout_reached{false};
 
-    // TLS
-    static TlsConn *tls_connect(const std::string &host, int port, bool verify_cert);
-    static void tls_close(TlsConn *c);
+    // TLS (internal)
     static bool tls_handshake(TlsConn *c, const std::string &host, bool verify_cert);
     static bool tls_send_all(TlsConn *c, const char *p, int n);
     static int tls_recv_some(TlsConn *c, char *buf, int want);
@@ -107,18 +131,14 @@ private:
     static int recv_n_raw(SOCKET s, char *p, int n);
     static SOCKET tcp_connect(const std::string &host, int port);
 
-    // WebSocket
-    static bool ws_handshake(TlsConn *c, const std::string &host, int port, const std::string &path);
+    // WebSocket (internal)
     static bool ws_send(TlsConn *c, int op, const void *data, size_t len);
-    static int ws_recv(TlsConn *c, std::vector<uint8_t> &payload);
     static std::string b64(const unsigned char *d, size_t n);
 
     // HTTP
     static std::string http_get(const std::string &host, int port, const std::string &path, bool verify_cert);
 
-    // JSON
-    static bool json_str(const std::string &j, const std::string &k, std::string &out);
-    static bool json_int(const std::string &j, const std::string &k, int &out);
+    // JSON (internal)
     static bool json_str_ex(const std::string &j, const std::string &k, std::string &out);
     static std::string json_escape(const std::string &s);
 
@@ -131,7 +151,7 @@ private:
     static void do_key(const std::string &code, bool down);
     static std::string clipboard_read_utf8();
     static void clipboard_write_utf8(const std::string &utf8);
-    static void handle_control(const std::string &j);
+    void handle_control(const std::string &j);
 
     // Screen metrics
     static bool read_screen_metrics(int &w, int &h, int &ox, int &oy);
@@ -154,6 +174,7 @@ private:
     void resolution_watch_loop();
     void clipboard_watch_loop();
     void run_session();
+    void check_activity_loop();
 
     // Globals
     static std::atomic<int> g_screen_w;
@@ -166,8 +187,9 @@ private:
 
 // ============ USER-SESSION WORKER ENTRYPOINT ============
 // Вызывается из main.cpp при флаге --rdp-worker.
-// Блокирует поток до завершения процесса (TerminateProcess извне).
+// Блокирует поток до завершения процесса (TerminateProcess извне или таймаут).
 int run_rdp_worker(const std::string &host, int port,
-                   const std::string &agent_id, bool verify_cert);
+                   const std::string &agent_id, bool verify_cert,
+                   int timeout_sec = 0);
 
 #endif // RDP_AGENT_H

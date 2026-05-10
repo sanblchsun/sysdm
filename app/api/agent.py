@@ -26,7 +26,7 @@ from app.models import AgentBuild
 from app.utils.hash import sha256_file
 from fastapi import Body
 from app.config import settings
-from app.api.relay import send_command_to_agent
+from app.api.relay import get_agent, send_command_to_agent
 
 # -------------------- TOP PANEL --------------------
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -377,4 +377,37 @@ async def control_uac(
         "action": "disable",
         "requires_reboot": True,
         "agent_connected": agent_connected,
+    }
+
+
+@router.post("/{agent_id}/start-rdp")
+async def start_rdp(
+    agent_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Send command to agent to start RDP worker process"""
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    relay_agent = await get_agent(agent.uuid)
+    timeout = relay_agent.rdp_timeout_target
+
+    command = {
+        "type": "command",
+        "cmd": "start-rdp-worker",
+        "timeout": timeout,
+    }
+    agent_connected = await send_command_to_agent(agent.uuid, command)
+
+    message = "RDP start command sent to agent"
+    if not agent_connected:
+        message = "Agent is not currently connected via WebSocket"
+        logger.warning(f"[start-rdp] Agent {agent.uuid} not connected")
+
+    return {
+        "status": "ok",
+        "message": message,
+        "agent_connected": agent_connected,
+        "timeout": timeout,
     }

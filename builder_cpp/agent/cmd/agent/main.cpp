@@ -52,6 +52,9 @@ std::mutex logMutex;
 std::ofstream logFile;
 std::atomic<bool> g_stopRequested(false);
 std::string g_telemetryMode = "none";
+std::string g_agent_uuid;
+std::string g_agent_token;
+std::atomic<int> g_rdp_worker_timeout{0};
 SERVICE_STATUS serviceStatus = {0};
 SERVICE_STATUS_HANDLE serviceHandle = NULL;
 HANDLE stopEvent = NULL;
@@ -616,6 +619,9 @@ bool spawnRDPWorker()
          << " --id=" << g_rdp_agent_id;
     if (!g_rdp_verify_cert)
         args << " --insecure";
+    int timeout = g_rdp_worker_timeout.load();
+    if (timeout > 0)
+        args << " --timeout=" << timeout;
     std::string cmdline = args.str();
 
     HANDLE hUserToken = GetActiveUserToken();
@@ -675,54 +681,101 @@ void stopRDPWorker()
     log("RDP worker stopped");
 }
 
-void rdpWorkerWatcher()
+void controlCommandLoop()
 {
-    int spawn_fail_count = 0;
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+    {
+        log("control loop: WSAStartup failed");
+        return;
+    }
+
+    std::string path_prefix = "/relay/ws/control/agent/";
     while (!g_stopRequested)
     {
-        // Проверяем живость worker'а
-        HANDLE hProc = NULL;
+        // Если worker уже запущен — не конкурируем за WS, просто ждём его завершения
         {
             std::lock_guard<std::mutex> lk(g_rdp_worker_m);
-            hProc = g_rdp_worker_pi.hProcess;
-        }
-        if (hProc)
-        {
-            DWORD exit_code = 0;
-            if (GetExitCodeProcess(hProc, &exit_code) && exit_code != STILL_ACTIVE)
+            if (g_rdp_worker_pi.hProcess)
             {
-                logf("RDP worker died, exit code %lu — respawn", exit_code);
-                std::lock_guard<std::mutex> lk(g_rdp_worker_m);
-                CloseHandle(g_rdp_worker_pi.hProcess);
-                CloseHandle(g_rdp_worker_pi.hThread);
-                g_rdp_worker_pi = {0};
+                DWORD ec = 0;
+                if (GetExitCodeProcess(g_rdp_worker_pi.hProcess, &ec) && ec != STILL_ACTIVE)
+                {
+                    logf("RDP worker exited, code=%lu — cleaning up", ec);
+                    CloseHandle(g_rdp_worker_pi.hProcess);
+                    CloseHandle(g_rdp_worker_pi.hThread);
+                    g_rdp_worker_pi = {0};
+                }
+                else
+                {
+                    // Worker is running, sleep and check again
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                    continue;
+                }
             }
         }
 
-        // Если нет worker'а — пытаемся запустить
+        // Подключаемся к control WS для приёма команд
+        TlsConn *c = RDPAgent::tls_connect(g_rdp_server_host, g_rdp_server_port, g_rdp_verify_cert);
+        if (!c)
         {
-            std::lock_guard<std::mutex> lk(g_rdp_worker_m);
-            hProc = g_rdp_worker_pi.hProcess;
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            continue;
         }
-        if (!hProc)
+        std::string ws_path = path_prefix + g_agent_uuid;
+        if (!RDPAgent::ws_handshake(c, g_rdp_server_host, g_rdp_server_port, ws_path))
         {
-            if (spawnRDPWorker())
+            log("control WS handshake failed");
+            RDPAgent::tls_close(c);
+            delete c;
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            continue;
+        }
+        log("Main agent control WS connected");
+
+        std::vector<uint8_t> buf;
+        while (!g_stopRequested)
+        {
+            int r = RDPAgent::ws_recv(c, buf);
+            if (r < 0)
+                break; // connection closed (e.g. rdp-worker took over)
+            if (r == 1)
             {
-                spawn_fail_count = 0;
-            }
-            else
-            {
-                // Не логируем каждую попытку, чтобы не спамить.
-                if (spawn_fail_count == 0 || spawn_fail_count % 20 == 0)
+                std::string msg(buf.begin(), buf.end());
+                std::string type;
+                if (!RDPAgent::json_str(msg, "type", type))
+                    continue;
+                if (type == "command")
                 {
-                    logf("RDP worker spawn attempt #%d failed (user not logged in?)",
-                         spawn_fail_count + 1);
+                    std::string cmd;
+                    if (RDPAgent::json_str(msg, "cmd", cmd))
+                    {
+                        logf("control ws: received command: %s", cmd.c_str());
+                        if (cmd == "start-rdp-worker")
+                        {
+                            int timeout = 0;
+                            RDPAgent::json_int(msg, "timeout", timeout);
+                            g_rdp_worker_timeout = timeout;
+                            logf("control ws: starting RDP worker, timeout=%d", timeout);
+                            spawnRDPWorker();
+                        }
+                        else if (cmd == "stop-rdp-worker")
+                        {
+                            log("control ws: stopping RDP worker");
+                            stopRDPWorker();
+                        }
+                    }
                 }
-                spawn_fail_count++;
             }
         }
-        std::this_thread::sleep_for(std::chrono::seconds(3));
+
+        RDPAgent::tls_close(c);
+        delete c;
+        log("control WS disconnected, reconnecting...");
+        std::this_thread::sleep_for(std::chrono::seconds(2));
     }
+
+    WSACleanup();
 }
 
 // ==================== UPDATE ====================
@@ -976,7 +1029,7 @@ void mainLogic()
         postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token, tb, rb, rc);
     }
 
-    // === CONFIGURE RDP WORKER ===
+    // === INIT RDP CONFIG (без запуска worker — ждём команду от сервера) ===
     {
         std::string rdp_host, rdp_path, rdp_query;
         int rdp_port;
@@ -984,13 +1037,14 @@ void mainLogic()
         g_rdp_server_host = rdp_host;
         g_rdp_server_port = rdp_port;
         g_rdp_agent_id = uuid;
-        g_rdp_verify_cert = false; // self-signed в dev
-        logf("RDP target: %s:%d agent_id=%s verify=%d",
-             g_rdp_server_host.c_str(), g_rdp_server_port,
-             g_rdp_agent_id.c_str(), g_rdp_verify_cert);
+        g_rdp_verify_cert = false;
+        g_agent_uuid = uuid;
+        g_agent_token = token;
+        // RDP worker НЕ запускается — будет запущен по команде с сервера
     }
 
-    std::thread watcherThread(rdpWorkerWatcher);
+    // Поток для приёма команд управления (start-rdp-worker / stop-rdp-worker)
+    std::thread cmdThread(controlCommandLoop);
 
     // === HEARTBEAT LOOP ===
     log("Entering main loop...");
@@ -1044,8 +1098,8 @@ void mainLogic()
     // === CLEANUP ===
     log("Cleaning up...");
     stopRDPWorker();
-    if (watcherThread.joinable())
-        watcherThread.join();
+    if (cmdThread.joinable())
+        cmdThread.join();
     log("Main logic finished");
 }
 
@@ -1187,6 +1241,7 @@ int main(int argc, char *argv[])
     std::string cli_server, cli_id;
     int cli_port = 443;
     bool cli_insecure = false;
+    int cli_timeout = 0;
     for (int i = 1; i < argc; ++i)
     {
         std::string a = argv[i];
@@ -1208,6 +1263,16 @@ int main(int argc, char *argv[])
         }
         else if (a.rfind("--id=", 0) == 0)
             cli_id = a.substr(5);
+        else if (a.rfind("--timeout=", 0) == 0)
+        {
+            try
+            {
+                cli_timeout = std::stoi(a.substr(10));
+            }
+            catch (...)
+            {
+            }
+        }
     }
 
     // ---- mode dispatch ----
@@ -1216,9 +1281,9 @@ int main(int argc, char *argv[])
         // worker пишет в отдельный лог, чтобы не смешивать с service-логом
         setupFileLogger("agent_rdp.log");
         log("=== Starting in RDP-WORKER mode ===");
-        logf("worker args: server=%s port=%d id=%s verify=%d",
-             cli_server.c_str(), cli_port, cli_id.c_str(), !cli_insecure);
-        return run_rdp_worker(cli_server, cli_port, cli_id, !cli_insecure);
+        logf("worker args: server=%s port=%d id=%s verify=%d timeout=%d",
+             cli_server.c_str(), cli_port, cli_id.c_str(), !cli_insecure, cli_timeout);
+        return run_rdp_worker(cli_server, cli_port, cli_id, !cli_insecure, cli_timeout);
     }
 
     // ---- service/install mode ----

