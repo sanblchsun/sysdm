@@ -45,6 +45,7 @@ struct RDPConfig
     std::string video_size = "";
     int config_poll_ms = 2000;
     int timeout_sec = 0; // 0 = no inactivity timeout
+    std::string shm_name; // shared memory name for activity tracking
 };
 
 struct RDPRuntime
@@ -64,7 +65,7 @@ struct RDPRuntime
     std::chrono::steady_clock::time_point last_ffmpeg_error_time;
     std::string last_ffmpeg_error;
 
-    // Inactivity timeout tracking
+    // Inactivity timeout tracking (shared with parent process)
     int timeout_sec = 0;
     std::chrono::steady_clock::time_point last_activity_time;
 };
@@ -92,7 +93,6 @@ public:
     void start();
     void stop();
     bool isRunning() const;
-    bool hasInactivityTimeout() const;
 
     struct Status
     {
@@ -118,7 +118,10 @@ private:
     RDPRuntime runtime;
     std::vector<std::thread> threads;
     bool running = false;
-    std::atomic<bool> inactivity_timeout_reached{false};
+
+    // Shared memory for activity tracking (written by worker, read by main process)
+    HANDLE shm_handle = nullptr;
+    volatile LONG64 *shm_activity = nullptr;
 
     // TLS (internal)
     static bool tls_handshake(TlsConn *c, const std::string &host, bool verify_cert);
@@ -174,7 +177,6 @@ private:
     void resolution_watch_loop();
     void clipboard_watch_loop();
     void run_session();
-    void check_activity_loop();
 
     // Globals
     static std::atomic<int> g_screen_w;
@@ -187,9 +189,10 @@ private:
 
 // ============ USER-SESSION WORKER ENTRYPOINT ============
 // Вызывается из main.cpp при флаге --rdp-worker.
-// Блокирует поток до завершения процесса (TerminateProcess извне или таймаут).
+// Блокирует поток до завершения процесса (TerminateProcess извне).
 int run_rdp_worker(const std::string &host, int port,
                    const std::string &agent_id, bool verify_cert,
-                   int timeout_sec = 0);
+                   int timeout_sec = 0,
+                   const std::string &shm_name = "");
 
 #endif // RDP_AGENT_H

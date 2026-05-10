@@ -1128,6 +1128,9 @@ void RDPAgent::handle_control(const std::string &j)
         type == "key_up" || type == "clipboard")
     {
         runtime.last_activity_time = std::chrono::steady_clock::now();
+        // Write to shared memory so main process (SYSTEM) can detect inactivity
+        if (shm_activity)
+            *shm_activity = GetTickCount64();
     }
 
     if (type == "mouse_move")
@@ -1704,9 +1707,47 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
     runtime.last_activity_time = std::chrono::steady_clock::now();
     log("RDPAgent created: agent_id=" + config.agent_id +
         " timeout=" + std::to_string(config.timeout_sec));
+
+    // Open shared memory for activity tracking (created by parent process)
+    if (!config.shm_name.empty())
+    {
+        shm_handle = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, config.shm_name.c_str());
+        if (shm_handle)
+        {
+            shm_activity = (volatile LONG64 *)MapViewOfFile(shm_handle, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LONG64));
+            if (shm_activity)
+            {
+                log("Activity shared memory opened: " + config.shm_name);
+                *shm_activity = GetTickCount64();
+            }
+            else
+            {
+                log("MapViewOfFile failed for activity shm");
+                CloseHandle(shm_handle);
+                shm_handle = nullptr;
+            }
+        }
+        else
+        {
+            log("OpenFileMapping failed for activity shm: " + config.shm_name);
+        }
+    }
 }
 
-RDPAgent::~RDPAgent() { stop(); }
+RDPAgent::~RDPAgent()
+{
+    stop();
+    if (shm_activity)
+    {
+        UnmapViewOfFile((LPVOID)shm_activity);
+        shm_activity = nullptr;
+    }
+    if (shm_handle)
+    {
+        CloseHandle(shm_handle);
+        shm_handle = nullptr;
+    }
+}
 
 void RDPAgent::start()
 {
@@ -1731,8 +1772,6 @@ void RDPAgent::start()
                          { resolution_watch_loop(); });
     threads.emplace_back([this]()
                          { clipboard_watch_loop(); });
-    threads.emplace_back([this]()
-                         { check_activity_loop(); });
     threads.emplace_back([this]()
                          {
         while (!runtime.stop) {
@@ -1769,35 +1808,6 @@ RDPAgent::Status RDPAgent::getStatus() const
     st.screen_h = g_screen_h.load();
     st.is_connected = (runtime.ctrl_conn != nullptr);
     return st;
-}
-
-bool RDPAgent::hasInactivityTimeout() const
-{
-    return inactivity_timeout_reached.load();
-}
-
-void RDPAgent::check_activity_loop()
-{
-    while (!runtime.stop)
-    {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        if (runtime.stop)
-            break;
-        if (runtime.timeout_sec <= 0)
-            continue;
-        auto now = std::chrono::steady_clock::now();
-        auto idle = std::chrono::duration_cast<std::chrono::seconds>(
-                        now - runtime.last_activity_time)
-                        .count();
-        if (idle >= runtime.timeout_sec)
-        {
-            logf("Inactivity timeout: %llds idle (limit %ds)",
-                 (long long)idle, runtime.timeout_sec);
-            inactivity_timeout_reached = true;
-            runtime.stop = true;
-            break;
-        }
-    }
 }
 
 // ============ SECURE DESKTOP DETECTION ============
@@ -1858,7 +1868,7 @@ bool RDPAgent::is_consent_exe_running()
 // ============ USER-SESSION WORKER ENTRYPOINT ============
 int run_rdp_worker(const std::string &host, int port,
                    const std::string &agent_id, bool verify_cert,
-                   int timeout_sec)
+                   int timeout_sec, const std::string &shm_name)
 {
     // Путь к ffmpeg рядом с собственным exe.
     char path[MAX_PATH] = {0};
@@ -1875,24 +1885,21 @@ int run_rdp_worker(const std::string &host, int port,
     cfg.verify_cert = verify_cert;
     cfg.ffmpeg_path = ffmpeg;
     cfg.timeout_sec = timeout_sec;
+    cfg.shm_name = shm_name;
 
-    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s timeout=%d",
-         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str(), timeout_sec);
+    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s timeout=%d shm=%s",
+         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str(), timeout_sec, shm_name.c_str());
 
     RDPAgent agent(cfg);
     agent.start();
 
-    // Блокируемся до завершения (родительский процесс сделает TerminateProcess
-    // или сработает таймаут неактивности).
-    while (agent.isRunning() && !agent.hasInactivityTimeout())
+    // Блокируемся до завершения (родительский процесс убьёт через TerminateProcess
+    // при таймауте неактивности или по команде stop-rdp-worker).
+    while (agent.isRunning())
     {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
     agent.stop();
-
-    if (agent.hasInactivityTimeout())
-        log("RDP worker finished due to inactivity timeout");
-
     return 0;
 }

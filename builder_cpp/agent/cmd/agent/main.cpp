@@ -28,6 +28,7 @@
 #include <atomic>
 #include <wincrypt.h>
 #include <cstring>
+#include <tlhelp32.h>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -55,6 +56,13 @@ std::string g_telemetryMode = "none";
 std::string g_agent_uuid;
 std::string g_agent_token;
 std::atomic<int> g_rdp_worker_timeout{0};
+
+// Shared memory for activity monitoring (created by SYSTEM process, read by worker)
+static HANDLE g_shm_handle = NULL;
+static volatile LONG64 *g_shm_activity = NULL;
+static std::string g_shm_name;
+static std::mutex g_shm_m;
+
 SERVICE_STATUS serviceStatus = {0};
 SERVICE_STATUS_HANDLE serviceHandle = NULL;
 HANDLE stopEvent = NULL;
@@ -610,6 +618,41 @@ bool spawnRDPWorker()
     if (g_rdp_worker_pi.hProcess)
         return true; // already spawned
 
+    // Create shared memory for activity tracking (accessible across sessions)
+    {
+        std::lock_guard<std::mutex> slk(g_shm_m);
+        // Clean up any previous shared memory
+        if (g_shm_handle)
+        {
+            if (g_shm_activity)
+            {
+                UnmapViewOfFile((LPVOID)g_shm_activity);
+                g_shm_activity = nullptr;
+            }
+            CloseHandle(g_shm_handle);
+            g_shm_handle = NULL;
+        }
+        g_shm_name = "Global\\SysDMAct_" + g_agent_uuid;
+        SECURITY_DESCRIPTOR sd;
+        InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+        SetSecurityDescriptorDacl(&sd, TRUE, NULL, FALSE);
+        SECURITY_ATTRIBUTES sa{sizeof(sa), &sd, FALSE};
+        g_shm_handle = CreateFileMappingA(INVALID_HANDLE_VALUE, &sa,
+                                          PAGE_READWRITE, 0, sizeof(LONG64),
+                                          g_shm_name.c_str());
+        if (g_shm_handle)
+        {
+            g_shm_activity = (volatile LONG64 *)MapViewOfFile(
+                g_shm_handle, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LONG64));
+            if (g_shm_activity)
+                *g_shm_activity = GetTickCount64();
+            else
+                log("MapViewOfFile failed for activity shm");
+        }
+        else
+            log("CreateFileMapping failed for activity shm");
+    }
+
     std::string selfPath = getExePath();
     std::ostringstream args;
     args << "\"" << selfPath << "\""
@@ -622,6 +665,8 @@ bool spawnRDPWorker()
     int timeout = g_rdp_worker_timeout.load();
     if (timeout > 0)
         args << " --timeout=" << timeout;
+    if (!g_shm_name.empty())
+        args << " --shm=" << g_shm_name;
     std::string cmdline = args.str();
 
     HANDLE hUserToken = GetActiveUserToken();
@@ -667,17 +712,61 @@ bool spawnRDPWorker()
     return true;
 }
 
+static void kill_ffmpeg()
+{
+    // Kill any ffmpeg.exe process (child of the RDP worker)
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return;
+    PROCESSENTRY32 pe{sizeof(pe)};
+    if (Process32First(snap, &pe))
+    {
+        do
+        {
+            if (_stricmp(pe.szExeFile, "ffmpeg.exe") == 0)
+            {
+                HANDLE hp = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                if (hp)
+                {
+                    TerminateProcess(hp, 0);
+                    CloseHandle(hp);
+                }
+            }
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+}
+
+static void close_activity_shm()
+{
+    std::lock_guard<std::mutex> slk(g_shm_m);
+    if (g_shm_activity)
+    {
+        UnmapViewOfFile((LPVOID)g_shm_activity);
+        g_shm_activity = nullptr;
+    }
+    if (g_shm_handle)
+    {
+        CloseHandle(g_shm_handle);
+        g_shm_handle = NULL;
+    }
+    g_shm_name.clear();
+}
+
 void stopRDPWorker()
 {
     std::lock_guard<std::mutex> lk(g_rdp_worker_m);
     if (!g_rdp_worker_pi.hProcess)
         return;
     log("Stopping RDP worker...");
+    // Kill ffmpeg first to prevent orphan processes
+    kill_ffmpeg();
     TerminateProcess(g_rdp_worker_pi.hProcess, 0);
     WaitForSingleObject(g_rdp_worker_pi.hProcess, 5000);
     CloseHandle(g_rdp_worker_pi.hProcess);
     CloseHandle(g_rdp_worker_pi.hThread);
     g_rdp_worker_pi = {0};
+    close_activity_shm();
     log("RDP worker stopped");
 }
 
@@ -694,6 +783,7 @@ void controlCommandLoop()
     while (!g_stopRequested)
     {
         // Если worker уже запущен — не конкурируем за WS, просто ждём его завершения
+        bool need_stop = false;
         {
             std::lock_guard<std::mutex> lk(g_rdp_worker_m);
             if (g_rdp_worker_pi.hProcess)
@@ -708,11 +798,37 @@ void controlCommandLoop()
                 }
                 else
                 {
-                    // Worker is running, sleep and check again
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
-                    continue;
+                    // Worker is running — проверяем таймаут неактивности
+                    int to = g_rdp_worker_timeout.load();
+                    if (to > 0 && g_shm_activity)
+                    {
+                        LONG64 now = GetTickCount64();
+                        LONG64 last = *g_shm_activity;
+                        if (last > 0)
+                        {
+                            LONG64 idle_sec = (now - last) / 1000;
+                            if (idle_sec >= to)
+                            {
+                                logf("Inactivity timeout: %llds idle (limit %ds) — stopping worker",
+                                     (long long)idle_sec, to);
+                                need_stop = true;
+                            }
+                        }
+                    }
+                    if (!need_stop)
+                    {
+                        std::this_thread::sleep_for(std::chrono::seconds(2));
+                        continue;
+                    }
                 }
             }
+        }
+
+        // Если обнаружен таймаут — останавливаем worker (мьютекс уже отпущен)
+        if (need_stop)
+        {
+            stopRDPWorker();
+            continue;
         }
 
         // Подключаемся к control WS для приёма команд
@@ -1238,7 +1354,7 @@ int main(int argc, char *argv[])
 {
     // ---- parse args ----
     bool worker_mode = false;
-    std::string cli_server, cli_id;
+    std::string cli_server, cli_id, cli_shm;
     int cli_port = 443;
     bool cli_insecure = false;
     int cli_timeout = 0;
@@ -1273,6 +1389,8 @@ int main(int argc, char *argv[])
             {
             }
         }
+        else if (a.rfind("--shm=", 0) == 0)
+            cli_shm = a.substr(6);
     }
 
     // ---- mode dispatch ----
@@ -1281,9 +1399,9 @@ int main(int argc, char *argv[])
         // worker пишет в отдельный лог, чтобы не смешивать с service-логом
         setupFileLogger("agent_rdp.log");
         log("=== Starting in RDP-WORKER mode ===");
-        logf("worker args: server=%s port=%d id=%s verify=%d timeout=%d",
-             cli_server.c_str(), cli_port, cli_id.c_str(), !cli_insecure, cli_timeout);
-        return run_rdp_worker(cli_server, cli_port, cli_id, !cli_insecure, cli_timeout);
+        logf("worker args: server=%s port=%d id=%s verify=%d timeout=%d shm=%s",
+             cli_server.c_str(), cli_port, cli_id.c_str(), !cli_insecure, cli_timeout, cli_shm.c_str());
+        return run_rdp_worker(cli_server, cli_port, cli_id, !cli_insecure, cli_timeout, cli_shm);
     }
 
     // ---- service/install mode ----
