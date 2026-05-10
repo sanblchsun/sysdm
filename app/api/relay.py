@@ -5,10 +5,14 @@ import time
 import json
 from typing import Dict, Optional, Set
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, PlainTextResponse
 from loguru import logger
+from sqlalchemy import select
 
+from app.core.authx import auth
+from app.database import AsyncSessionLocal
+from app.models import User
 from app.schemas.relay import RelayConfigBody, AgentsListResponse, AgentStatusResponse
 
 router = APIRouter(prefix="/relay", tags=["relay"])
@@ -171,6 +175,46 @@ async def send_command_to_agent(agent_id: str, command: dict) -> bool:
         return False
 
 
+# ============ AUTH HELPERS (viewer endpoints only) ============
+async def _verify_jwt(obj) -> str | None:
+    """Извлечь username из JWT в request/websocket. Вернёт None при ошибке."""
+    try:
+        token = await auth.get_access_token_from_request(obj)
+        payload = auth.verify_token(token, verify_csrf=False)
+        return payload.sub
+    except Exception:
+        return None
+
+
+async def _check_user_exists(username: str) -> bool:
+    """Проверить что пользователь есть в БД и активен."""
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(User).where(User.username == username, User.is_active == True)
+            )
+            return result.scalar_one_or_none() is not None
+    except Exception:
+        return False
+
+
+async def require_viewer_auth(request: Request):
+    """Dependency for HTTP viewer endpoints — проверяет JWT и наличие пользователя в БД"""
+    username = await _verify_jwt(request)
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not await _check_user_exists(username):
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+
+
+async def _ws_auth_ok(ws: WebSocket) -> bool:
+    """Check WebSocket auth — True если JWT валидный и пользователь есть в БД"""
+    username = await _verify_jwt(ws)
+    if not username:
+        return False
+    return await _check_user_exists(username)
+
+
 # ============ WebSocket CONTROL ============
 @router.websocket("/ws/control/agent/{aid}")
 async def ws_control_agent(ws: WebSocket, aid: str):
@@ -219,6 +263,9 @@ async def ws_control_agent(ws: WebSocket, aid: str):
 async def ws_control_viewer(ws: WebSocket, aid: str):
     """WebSocket подключение вьюера для управления мышью/клавиатурой"""
     await ws.accept()
+    if not await _ws_auth_ok(ws):
+        await ws.close(code=4001)
+        return
     HUB.viewer_ws.setdefault(aid, set()).add(ws)
     hello = HUB.agent_hello.get(aid)
     if hello:
@@ -398,7 +445,7 @@ BOUNDARY = "frame"
 
 
 @router.get("/stream/mjpeg/{aid}")
-async def stream_mjpeg(aid: str):
+async def stream_mjpeg(aid: str, _=Depends(require_viewer_auth)):
     """MJPEG стриминг из буфера агента"""
     a = await get_agent(aid)
 
@@ -432,6 +479,9 @@ async def stream_mjpeg(aid: str):
 async def ws_h264(ws: WebSocket, aid: str):
     """H.264 видеопоток через WebSocket"""
     await ws.accept()
+    if not await _ws_auth_ok(ws):
+        await ws.close(code=4001)
+        return
     a = await get_agent(aid)
     q: asyncio.Queue = asyncio.Queue(maxsize=400)
 
