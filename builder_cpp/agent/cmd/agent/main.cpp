@@ -886,6 +886,14 @@ void controlCommandLoop()
                             log("control ws: stopping RDP worker");
                             stopRDPWorker();
                         }
+                        else if (cmd == "disable-uac")
+                        {
+                            log("control ws: executing disable_uac() from main process");
+                            if (disable_uac())
+                                log("control ws: UAC disabled successfully");
+                            else
+                                log("control ws: WARNING - Failed to disable UAC");
+                        }
                     }
                 }
             }
