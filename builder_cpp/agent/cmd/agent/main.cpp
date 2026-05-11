@@ -433,6 +433,73 @@ bool postJSON(const std::string &url, const std::string &bodyStr,
     return true;
 }
 
+bool getJSON(const std::string &url, std::string &responseBody, int &statusCode)
+{
+    std::string host, path, query;
+    int port;
+    if (!parseUrl(url, host, port, path, query))
+        return false;
+    std::string fullPath = path + query;
+
+    HINTERNET hSession = WinHttpOpen(L"Agent/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
+    if (!hSession)
+        return false;
+    std::wstring whost(host.begin(), host.end());
+    HINTERNET hConnect = WinHttpConnect(hSession, whost.c_str(), port, 0);
+    if (!hConnect)
+    {
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+    std::wstring wpath(fullPath.begin(), fullPath.end());
+    DWORD dwFlags = 0;
+    if (url.find("https://") == 0)
+        dwFlags |= WINHTTP_FLAG_SECURE;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath.c_str(), NULL, NULL, NULL, dwFlags);
+    if (!hRequest)
+    {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+    if (url.find("https://") == 0)
+    {
+        DWORD dwCertFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                            SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                            SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                            SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwCertFlags, sizeof(dwCertFlags));
+    }
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, NULL))
+    {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+    DWORD dwStatusCode = 0;
+    DWORD dwSize = sizeof(dwStatusCode);
+    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            NULL, &dwStatusCode, &dwSize, NULL))
+        statusCode = (int)dwStatusCode;
+    else
+        statusCode = 0;
+    char buffer[4096] = {0};
+    DWORD bytesRead = 0;
+    std::string response;
+    while (WinHttpReadData(hRequest, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0)
+    {
+        buffer[bytesRead] = 0;
+        response += buffer;
+    }
+    responseBody = response;
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return true;
+}
+
 // ==================== TELEMETRY ====================
 
 struct TelemetryData
@@ -1075,6 +1142,19 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
 
 // ==================== MAIN LOGIC ====================
 
+// Forward declarations for functions defined later
+static void pending_commands_poll_thread(const std::string &uuid, const std::string &token);
+static bool execute_login_user(const std::string &uuid, const std::string &token,
+                                const std::string &username, const std::string &password);
+static void recover_pending_login_state();
+static void clear_autoadmin_logon();
+static int wait_for_new_session(const std::string &expected_user, int timeout_sec);
+static bool enable_shutdown_privilege();
+static bool json_extract_str(const std::string &body, const std::string &key, std::string &out);
+static void report_command_result(const std::string &uuid, const std::string &token,
+                                   const std::string &cmd_type, bool success,
+                                   const std::string &message);
+
 void mainLogic()
 {
     logf("Agent started %s", buildSlug.c_str());
@@ -1137,6 +1217,9 @@ void mainLogic()
     if (g_stopRequested)
         return;
 
+    // === RECOVER FROM CRASH DURING LOGIN-USER ===
+    recover_pending_login_state();
+
     // === INITIAL TELEMETRY ===
     {
         log("Sending telemetry...");
@@ -1175,6 +1258,9 @@ void mainLogic()
 
     // Поток для приёма команд управления (start-rdp-worker / stop-rdp-worker)
     std::thread cmdThread(controlCommandLoop);
+
+    // Поток для pending-команд (login-user и т.п.)
+    std::thread pendingCmdThread(pending_commands_poll_thread, uuid, token);
 
     // === HEARTBEAT LOOP ===
     log("Entering main loop...");
@@ -1230,6 +1316,8 @@ void mainLogic()
     stopRDPWorker();
     if (cmdThread.joinable())
         cmdThread.join();
+    if (pendingCmdThread.joinable())
+        pendingCmdThread.join();
     log("Main logic finished");
 }
 
@@ -1315,6 +1403,438 @@ bool disable_uac()
     RegCloseKey(hKey);
     log("UAC disabled via registry (EnableLUA=0). Reboot required for changes to take effect.");
     return true;
+}
+
+// ==================== PENDING LOGIN STATE (reboot recovery) ====================
+// Save state before reboot so that after reboot the agent can wait for the
+// target user to log in (via AutoAdminLogon), clean up, and report the result.
+
+static std::string pending_login_state_path()
+{
+    return getExeDir() + "\\pending_login_user.json";
+}
+
+static void save_pending_login_state(const std::string &username, const std::string &domain,
+                                      const std::string &uuid, const std::string &token)
+{
+    std::string path = pending_login_state_path();
+    std::string json = "{\"username\":\"" + jsonEscape(username) +
+                       "\",\"domain\":\"" + jsonEscape(domain) +
+                       "\",\"uuid\":\"" + jsonEscape(uuid) +
+                       "\",\"token\":\"" + jsonEscape(token) + "\"}";
+    std::ofstream of(path);
+    if (of.is_open())
+    {
+        of << json;
+        of.close();
+        logf("save_pending_login_state: %s", path.c_str());
+    }
+}
+
+static void clear_pending_login_state()
+{
+    std::string path = pending_login_state_path();
+    DeleteFileA(path.c_str());
+    log("clear_pending_login_state");
+}
+
+// Called early in mainLogic() after registration. If a pending_login_user.json
+// exists, the machine was rebooted for a login-user switch. Wait for the target
+// user to appear in an active console session, then clean up AutoAdminLogon.
+static void recover_pending_login_state()
+{
+    std::string path = pending_login_state_path();
+    std::ifstream ifs(path);
+    if (!ifs.good())
+        return;
+
+    std::string json((std::istreambuf_iterator<char>(ifs)),
+                      std::istreambuf_iterator<char>());
+    ifs.close();
+
+    logf("recover_pending_login_state: found %s", path.c_str());
+
+    // Parse saved state
+    std::string username, domain, uuid, token;
+    json_extract_str(json, "username", username);
+    json_extract_str(json, "domain", domain);
+    json_extract_str(json, "uuid", uuid);
+    json_extract_str(json, "token", token);
+
+    if (username.empty())
+    {
+        log("recover_pending_login_state: invalid state file, just cleaning up");
+        clear_autoadmin_logon();
+        DeleteFileA(path.c_str());
+        return;
+    }
+
+    logf("recover_pending_login_state: waiting for user '%s' to log in (up to 300s)...",
+         username.c_str());
+
+    // Wait for AutoAdminLogon to log in the target user (after reboot)
+    int newSessionId = wait_for_new_session(username, 300);
+
+    // Clear AutoAdminLogon regardless
+    clear_autoadmin_logon();
+
+    if (newSessionId >= 0)
+    {
+        logf("recover_pending_login_state: user '%s' logged in, session %d — cleanup done",
+             username.c_str(), newSessionId);
+        if (!uuid.empty() && !token.empty())
+            report_command_result(uuid, token, "login-user", true, "Switched via reboot to " + username);
+    }
+    else
+    {
+        log("recover_pending_login_state: timeout waiting for user — cleaned up AutoAdminLogon");
+        if (!uuid.empty() && !token.empty())
+            report_command_result(uuid, token, "login-user", false,
+                                  "Reboot done but timed out waiting for user: " + username);
+    }
+
+    DeleteFileA(path.c_str());
+}
+
+// ==================== SESSION SWITCH ====================
+// Helper: skip whitespace in JSON
+static void json_skip_ws(const std::string &s, size_t &p)
+{
+    while (p < s.size() && (s[p] == ' ' || s[p] == '\t' || s[p] == '\n' || s[p] == '\r'))
+        p++;
+}
+
+// Helper to find a JSON string value (handles both "key":"val" and "key": "val")
+static bool json_extract_str(const std::string &body, const std::string &key, std::string &out)
+{
+    std::string needle = "\"" + key + "\":";
+    size_t p = body.find(needle);
+    if (p == std::string::npos)
+        return false;
+    p += needle.size();
+    json_skip_ws(body, p);
+    if (p >= body.size() || body[p] != '"')
+        return false;
+    p++; // skip opening quote
+    size_t e = body.find("\"", p);
+    if (e == std::string::npos)
+        return false;
+    out = body.substr(p, e - p);
+    return true;
+}
+
+static bool json_extract_bool(const std::string &body, const std::string &key, bool &out)
+{
+    std::string needle = "\"" + key + "\":";
+    size_t p = body.find(needle);
+    if (p == std::string::npos)
+        return false;
+    p += needle.size();
+    json_skip_ws(body, p);
+    if (body.substr(p, 4) == "true")
+        out = true;
+    else if (body.substr(p, 5) == "false")
+        out = false;
+    else
+        return false;
+    return true;
+}
+
+// Set AutoAdminLogon registry keys
+static bool set_autoadmin_logon(const std::string &username, const std::string &domain,
+                                 const std::string &password)
+{
+    HKEY hKey;
+    LONG result = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                                 "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                                 0, KEY_SET_VALUE, &hKey);
+    if (result != ERROR_SUCCESS)
+    {
+        logf("set_autoadmin_logon: RegOpenKeyEx failed: %ld", result);
+        return false;
+    }
+
+    RegSetValueExA(hKey, "AutoAdminLogon", 0, REG_SZ, (BYTE *)"1", 2);
+    RegSetValueExA(hKey, "DefaultUserName", 0, REG_SZ,
+                   (BYTE *)username.c_str(), (DWORD)username.size() + 1);
+    if (!domain.empty())
+        RegSetValueExA(hKey, "DefaultDomainName", 0, REG_SZ,
+                       (BYTE *)domain.c_str(), (DWORD)domain.size() + 1);
+    RegSetValueExA(hKey, "DefaultPassword", 0, REG_SZ,
+                   (BYTE *)password.c_str(), (DWORD)password.size() + 1);
+
+    RegCloseKey(hKey);
+    log("set_autoadmin_logon: AutoAdminLogon set for " + username);
+    return true;
+}
+
+// Clear AutoAdminLogon registry keys
+static void clear_autoadmin_logon()
+{
+    HKEY hKey;
+    LONG result = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                                 "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                                 0, KEY_SET_VALUE, &hKey);
+    if (result != ERROR_SUCCESS)
+        return;
+
+    RegSetValueExA(hKey, "AutoAdminLogon", 0, REG_SZ, (BYTE *)"0", 2);
+    RegDeleteValueA(hKey, "DefaultPassword");
+    // Don't delete DefaultUserName/DefaultDomainName — they're informational
+
+    RegCloseKey(hKey);
+    log("clear_autoadmin_logon: AutoAdminLogon cleared");
+}
+
+static void report_command_result(const std::string &uuid, const std::string &token,
+                                   const std::string &cmd_type, bool success,
+                                   const std::string &message)
+{
+    std::string url = serverURL + "/api/agent/command-result?uuid=" + uuid + "&token=" + token;
+    std::string body = "{\"command_type\":\"" + cmd_type + "\","
+                        "\"success\":" + (success ? "true" : "false") + ","
+                        "\"message\":\"" + jsonEscape(message) + "\"}";
+    std::string dummy;
+    int code;
+    postJSON(url, body, dummy, code);
+    logf("report_command_result: %s success=%d code=%d msg=%s",
+         cmd_type.c_str(), (int)success, code, message.c_str());
+}
+
+// Enable SE_SHUTDOWN_NAME privilege for ExitWindowsEx
+static bool enable_shutdown_privilege()
+{
+    HANDLE hToken;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+    {
+        logf("enable_shutdown_privilege: OpenProcessToken failed: %lu", GetLastError());
+        return false;
+    }
+    TOKEN_PRIVILEGES tp;
+    LUID luid;
+    if (!LookupPrivilegeValueA(NULL, "SeShutdownPrivilege", &luid))
+    {
+        logf("enable_shutdown_privilege: LookupPrivilegeValue failed: %lu", GetLastError());
+        CloseHandle(hToken);
+        return false;
+    }
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = luid;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (!AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(tp), NULL, NULL))
+    {
+        logf("enable_shutdown_privilege: AdjustTokenPrivileges failed: %lu", GetLastError());
+        CloseHandle(hToken);
+        return false;
+    }
+    CloseHandle(hToken);
+    log("enable_shutdown_privilege: SeShutdownPrivilege enabled");
+    return true;
+}
+
+// Wait for a new active console session after disconnect
+static int wait_for_new_session(const std::string &expected_user, int timeout_sec)
+{
+    for (int i = 0; i < timeout_sec; i++)
+    {
+        Sleep(1000);
+        DWORD sessionId = WTSGetActiveConsoleSessionId();
+        if (sessionId == 0xFFFFFFFF)
+            continue;
+        if (sessionId == 0)
+            continue; // still in Winlogon
+
+        // Check who owns the new session
+        PWTS_SESSION_INFOW pInfo = NULL;
+        DWORD count = 0;
+        if (WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &pInfo, &count))
+        {
+            int foundId = -1;
+            for (DWORD j = 0; j < count; j++)
+            {
+                if (pInfo[j].SessionId == sessionId &&
+                    pInfo[j].State == WTSActive)
+                {
+                    // Got an active session — extract username
+                    LPWSTR userName = NULL;
+                    DWORD userNameLen = 0;
+                    if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, sessionId,
+                                                     WTSUserName, &userName, &userNameLen))
+                    {
+                        // Convert UTF-16 to UTF-8 using WideCharToMultiByte (reliable)
+                        int utf8Len = WideCharToMultiByte(CP_UTF8, 0, userName, -1,
+                                                           NULL, 0, NULL, NULL);
+                        std::string user;
+                        if (utf8Len > 1)
+                        {
+                            user.resize(utf8Len - 1); // exclude null terminator
+                            WideCharToMultiByte(CP_UTF8, 0, userName, -1,
+                                                &user[0], utf8Len, NULL, NULL);
+                        }
+                        WTSFreeMemory(userName);
+
+                        logf("wait_for_new_session: active session %lu user=%s",
+                             (unsigned long)sessionId, user.c_str());
+
+                        // Match expected user if specified, otherwise accept any
+                        if (expected_user.empty() ||
+                            _stricmp(user.c_str(), expected_user.c_str()) == 0)
+                        {
+                            foundId = (int)sessionId;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        foundId = (int)sessionId;
+                        break;
+                    }
+                }
+            }
+            WTSFreeMemory(pInfo);
+            if (foundId >= 0)
+                return foundId;
+        }
+    }
+    log("wait_for_new_session: timeout waiting for new active session");
+    return -1;
+}
+
+// Execute login-user command: set AutoAdminLogon, reboot, cleanup after reboot.
+static bool execute_login_user(const std::string &uuid, const std::string &token,
+                                const std::string &username, const std::string &password)
+{
+    logf("execute_login_user: switching to user '%s' via reboot", username.c_str());
+
+    // 1. Verify credentials
+    HANDLE hToken = NULL;
+    if (!LogonUserA(username.c_str(), NULL, password.c_str(),
+                    LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &hToken))
+    {
+        DWORD err = GetLastError();
+        logf("execute_login_user: LogonUser failed for '%s': %lu", username.c_str(), err);
+        return false;
+    }
+    CloseHandle(hToken);
+    log("execute_login_user: credentials verified");
+
+    // 2. Parse domain and plain username
+    std::string domain;
+    size_t bs = username.find('\\');
+    std::string uname = username;
+    if (bs != std::string::npos)
+    {
+        domain = username.substr(0, bs);
+        uname = username.substr(bs + 1);
+    }
+    else
+    {
+        LPWSTR domainName = NULL;
+        DWORD len = 0;
+        if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
+                                         WTSDomainName, &domainName, &len))
+        {
+            int utf8Len = WideCharToMultiByte(CP_UTF8, 0, domainName, -1,
+                                               NULL, 0, NULL, NULL);
+            if (utf8Len > 1)
+            {
+                domain.resize(utf8Len - 1);
+                WideCharToMultiByte(CP_UTF8, 0, domainName, -1,
+                                    &domain[0], utf8Len, NULL, NULL);
+            }
+            WTSFreeMemory(domainName);
+        }
+    }
+
+    // 3. Set AutoAdminLogon
+    log("execute_login_user: setting AutoAdminLogon...");
+    if (!set_autoadmin_logon(uname, domain, password))
+    {
+        report_command_result(uuid, token, "login-user", false, "Failed to set AutoAdminLogon");
+        return false;
+    }
+
+    // 4. Save state for post-reboot recovery (includes uuid/token for reporting)
+    save_pending_login_state(uname, domain, uuid, token);
+
+    // 5. Reboot the system — AutoAdminLogon will log in the target user on next boot
+    log("execute_login_user: enabling shutdown privilege...");
+    if (!enable_shutdown_privilege())
+    {
+        clear_autoadmin_logon();
+        clear_pending_login_state();
+        report_command_result(uuid, token, "login-user", false, "Failed to enable shutdown privilege");
+        return false;
+    }
+
+    log("execute_login_user: rebooting system...");
+    if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCE,
+                        SHTDN_REASON_MAJOR_OPERATINGSYSTEM | SHTDN_REASON_MINOR_RECONFIG))
+    {
+        DWORD err = GetLastError();
+        logf("execute_login_user: ExitWindowsEx failed: %lu", err);
+        clear_autoadmin_logon();
+        clear_pending_login_state();
+        report_command_result(uuid, token, "login-user", false,
+                              "Reboot failed: " + std::to_string(err));
+        return false;
+    }
+
+    // If we get here, the reboot was initiated — the process will be terminated by the OS.
+    // After reboot, recover_pending_login_state() in mainLogic() will wait for the target
+    // user to log in, clear AutoAdminLogon, and report the result.
+    log("execute_login_user: reboot initiated, process will exit");
+    return true;
+}
+
+// Thread: poll for pending commands from server
+static void pending_commands_poll_thread(const std::string &uuid, const std::string &token)
+{
+    log("pending_commands_poll_thread: started");
+    while (!g_stopRequested)
+    {
+        for (int i = 0; i < 2 && !g_stopRequested; i++)
+            Sleep(1000);
+
+        std::string url = serverURL + "/api/agent/pending-command?uuid=" + uuid + "&token=" + token;
+        logf("pending_commands_poll_thread: polling %s", url.c_str());
+        std::string resp;
+        int code = 0;
+        if (!getJSON(url, resp, code))
+        {
+            logf("pending_commands_poll_thread: getJSON failed (code=%d)", code);
+            continue;
+        }
+        if (code != 200)
+        {
+            logf("pending_commands_poll_thread: HTTP %d: %s", code, resp.c_str());
+            continue;
+        }
+        logf("pending_commands_poll_thread: response: %s", resp.c_str());
+
+        // Parse response: {"type": "login-user", "data": {...}}
+        std::string cmd_type;
+        if (!json_extract_str(resp, "type", cmd_type) || cmd_type.empty())
+            continue;
+
+        logf("pending_commands_poll_thread: received command type=%s", cmd_type.c_str());
+
+        if (cmd_type == "login-user")
+        {
+            std::string username, password;
+            if (!json_extract_str(resp, "username", username) ||
+                !json_extract_str(resp, "password", password))
+            {
+                log("pending_commands_poll_thread: login-user missing username/password");
+                report_command_result(uuid, token, "login-user", false,
+                                      "Missing username/password in response");
+                continue;
+            }
+
+            execute_login_user(uuid, token, username, password);
+        }
+    }
+    log("pending_commands_poll_thread: stopped");
 }
 
 bool installService()

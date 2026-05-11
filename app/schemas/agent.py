@@ -49,3 +49,20 @@ class AgentTelemetryModeUpdate(BaseModel):
 # Schema for UAC control
 class AgentUACControl(BaseModel):
     action: str  # "disable"
+
+
+# Schema for login session
+class LoginSessionIn(BaseModel):
+    username: str
+    password: str
+
+
+class PendingCommandOut(BaseModel):
+    type: str | None = None
+    data: dict | None = None
+
+
+class CommandResultIn(BaseModel):
+    command_type: str
+    success: bool
+    message: str = ""

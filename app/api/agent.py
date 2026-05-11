@@ -16,6 +16,8 @@ from app.schemas.agent import (
     AgentRegisterOut,
     AgentTelemetryIn,
     AgentUACControl,
+    LoginSessionIn,
+    CommandResultIn,
 )
 from sqlalchemy import select, update
 from app.schemas.agent_update import (
@@ -411,3 +413,61 @@ async def start_rdp(
         "agent_connected": agent_connected,
         "timeout": timeout,
     }
+
+
+# ==================== SESSION SWITCH (pending commands for SYSTEM process) ====================
+
+_pending_commands: dict[str, list[dict]] = {}
+_pending_results: dict[str, list[dict]] = {}
+
+
+@router.post("/{agent_id}/login-session")
+async def login_session(
+    agent_id: int,
+    data: LoginSessionIn,
+    session: AsyncSession = Depends(get_db),
+):
+    """Queue login-session command for agent to switch to another Windows user"""
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    command = {
+        "type": "login-user",
+        "username": data.username,
+        "password": data.password,
+    }
+    lst = _pending_commands.setdefault(agent.uuid, [])
+    lst.append(command)
+    logger.info(f"[login-session] Queued for agent {agent.uuid}: {data.username}")
+
+    return {"status": "ok", "message": f"Login command queued for {data.username}"}
+
+
+@router.get("/pending-command")
+async def pending_command(
+    uuid: str,
+    token: str,
+    _=Depends(get_agent_by_token),
+):
+    """Polled by agent (SYSTEM process) every 2s for pending commands"""
+    lst = _pending_commands.get(uuid, [])
+    if not lst:
+        return {"type": None}
+    cmd = lst.pop(0)
+    # Return flat JSON so C++ can parse it with simple string search
+    return cmd
+
+
+@router.post("/command-result")
+async def command_result(
+    uuid: str,
+    token: str,
+    data: CommandResultIn,
+    _=Depends(get_agent_by_token),
+):
+    """Agent reports result of executing a pending command"""
+    lst = _pending_results.setdefault(uuid, [])
+    lst.append(data.model_dump())
+    logger.info(f"[command-result] agent={uuid} type={data.command_type} success={data.success} msg={data.message}")
+    return {"status": "ok"}

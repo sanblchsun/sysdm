@@ -190,3 +190,53 @@ async function takeControl() {
   window.open('/rdp/dashboard', '_blank');
   _takeControlBusy = false;
 }
+
+// ==================== LOGIN SESSION (Switch Windows User) ====================
+async function loginSession() {
+  const agentId = getAgentId();
+  if (!agentId) return;
+
+  const username = prompt("Windows username (e.g. user@domain or DOMAIN\\user):");
+  if (!username) return;
+
+  const password = prompt("Password for " + username + ":");
+  if (!password) return;
+
+  if (!confirm(`Switch to user "${username}"? Current session will be disconnected.`)) return;
+
+  try {
+    const response = await fetch(`/api/agent/${agentId}/login-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    }
+
+    const data = await response.json();
+    alert(`✓ ${data.message}\n\nThe agent will switch users within a few seconds.`);
+  } catch (error) {
+    alert("Failed to send login command: " + error.message);
+  }
+
+  closeActionsMenu();
+}
+
+function getAgentId() {
+  const bottomPanel = document.querySelector('.bottom-panel');
+  const id = bottomPanel?.getAttribute('data-agent-id') || window.currentAgentId || null;
+  if (!id) {
+    alert("Agent not selected. Please select an agent first.");
+    return null;
+  }
+  return id;
+}
+
+function closeActionsMenu() {
+  const menu = document.getElementById("actions-menu");
+  const btn = document.getElementById("actions-btn");
+  if (menu) menu.classList.remove("open");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
