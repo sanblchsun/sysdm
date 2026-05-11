@@ -358,6 +358,7 @@
         let decoder = null;
         let initInFlight = false;
         let buf = new Uint8Array(0);
+        let bufOff = 0;
         let waitingKey = true;
         let frames = 0,
           bytes = 0,
@@ -370,19 +371,25 @@
         ws.binaryType = "arraybuffer";
         ws.onerror = () => showErr("WebSocket error");
         ws.onmessage = (ev) => {
-          const add = new Uint8Array(ev.data);
-          bytes += add.length;
-          if (add.length === 0) return;
-          const merged = new Uint8Array(buf.length + add.length);
-          merged.set(buf, 0);
-          merged.set(add, buf.length);
-          buf = merged;
+          const data = new Uint8Array(ev.data);
+          bytes += data.length;
+          if (data.length === 0) return;
+          if (bufOff > buf.length / 2) {
+            buf = buf.slice(bufOff);
+            bufOff = 0;
+          }
+          const keep = buf.length - bufOff;
+          const tmp = new Uint8Array(keep + data.length);
+          tmp.set(buf.subarray(bufOff), 0);
+          tmp.set(data, keep);
+          buf = tmp;
+          bufOff = 0;
           drainAUs();
         };
 
-        function findStartCodes(data) {
+        function scanCodes(data, from) {
           const out = [];
-          let i = 0,
+          let i = Math.max(0, from),
             n = data.length;
           while (i + 3 < n) {
             if (data[i] === 0 && data[i + 1] === 0) {
@@ -402,7 +409,7 @@
           return out;
         }
         function drainAUs() {
-          const codes = findStartCodes(buf);
+          const codes = scanCodes(buf, 0);
           if (codes.length < 2) return;
           const starts = [];
           for (let k = 0; k < codes.length; k++) {
@@ -416,10 +423,10 @@
             const au = buf.subarray(starts[i], starts[i + 1]);
             handleAU(au);
           }
-          buf = buf.slice(starts[starts.length - 1]);
+          bufOff = starts[starts.length - 1];
         }
         function findNALU(au, type) {
-          const cs = findStartCodes(au);
+          const cs = scanCodes(au, 0);
           for (const c of cs)
             if (nalType(au[c.pos + c.len]) === type) return c.pos + c.len;
           return -1;

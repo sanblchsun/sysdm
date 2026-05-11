@@ -33,9 +33,8 @@ class AgentState:
         "encoder_current",
         "bitrate_current",
         "fps_current",
-        "mjpeg_latest",
         "mjpeg_count",
-        "_mjpeg_event",
+        "_mjpeg_queue",
         "h264_keyframe_buffer",
         "h264_subscribers",
         "h264_count",
@@ -56,9 +55,8 @@ class AgentState:
         self.bitrate_current: Optional[str] = None
         self.fps_current: Optional[int] = None
 
-        self.mjpeg_latest: Optional[bytes] = None
         self.mjpeg_count: int = 0
-        self._mjpeg_event = asyncio.Event()
+        self._mjpeg_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
 
         self.h264_keyframe_buffer = bytearray()
         self.h264_subscribers: Set[asyncio.Queue] = set()
@@ -68,19 +66,19 @@ class AgentState:
         self.started: float = time.time()
 
     def push_mjpeg(self, frame: bytes):
-        self.mjpeg_latest = frame
         self.mjpeg_count += 1
         self.updated = time.time()
-        ev = self._mjpeg_event
-        self._mjpeg_event = asyncio.Event()
-        ev.set()
-
-    async def wait_mjpeg(self, timeout: float = 5.0) -> bool:
         try:
-            await asyncio.wait_for(self._mjpeg_event.wait(), timeout=timeout)
-            return True
-        except asyncio.TimeoutError:
-            return False
+            self._mjpeg_queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            try:
+                self._mjpeg_queue.get_nowait()
+                self._mjpeg_queue.put_nowait(frame)
+            except asyncio.QueueEmpty:
+                pass
+
+    async def get_mjpeg(self) -> bytes:
+        return await self._mjpeg_queue.get()
 
     def push_h264(self, chunk: bytes):
         idr_off = find_idr_offset(chunk)
@@ -116,6 +114,22 @@ class ControlHub:
 AGENTS: Dict[str, AgentState] = {}
 LOCK = asyncio.Lock()
 HUB = ControlHub()
+
+STALE_TIMEOUT = 30.0
+
+
+async def cleanup_stale_agents():
+    while True:
+        await asyncio.sleep(STALE_TIMEOUT)
+        now = time.time()
+        stale = [aid for aid, a in AGENTS.items()
+                 if now - a.updated > STALE_TIMEOUT * 2]
+        async with LOCK:
+            for aid in stale:
+                if aid in AGENTS:
+                    del AGENTS[aid]
+        if stale:
+            logger.info(f"[relay] cleaned {len(stale)} stale agents: {stale}")
 
 
 # ============ HELPERS ============
@@ -382,52 +396,38 @@ async def ingest(aid: str, request: Request):
     else:
         a.codec_current = "mjpeg"
         logger.info(f"[relay] mjpeg <- {request.client.host} id={aid}")
-        logger.warning(f"[relay] BEFORE stream() - waiting for chunks...")
-        buf = bytearray()
+        buf = b""
+        offset = 0
         frame_count = 0
         total_bytes = 0
         try:
-            logger.warning(f"[relay] ENTERING stream() loop...")
             async for chunk in request.stream():
                 if not chunk:
                     continue
                 total_bytes += len(chunk)
-                # logger.debug(
-                #     f"[relay] mjpeg {aid}: received chunk size={len(chunk)}, total_bytes={total_bytes}"
-                # )
-                buf.extend(chunk)
-                # logger.debug(f"[relay] mjpeg {aid}: buf.size={len(buf)}")
+                buf += chunk
                 while True:
-                    soi = buf.find(MJPEG_SOI)
+                    soi = buf.find(MJPEG_SOI, offset)
                     if soi < 0:
-                        # logger.debug(
-                        #     f"[relay] mjpeg {aid}: no SOI found in buf, buf size={len(buf)}"
-                        # )
-                        buf.clear()
-                        break
-                    if soi > 0:
-                        # logger.debug(
-                        #     f"[relay] mjpeg {aid}: SOI at offset {soi}, skipping {soi} bytes"
-                        # )
-                        del buf[:soi]
-                    eoi = buf.find(MJPEG_EOI, 2)
-                    if eoi < 0:
-                        # logger.debug(
-                        #     f"[relay] mjpeg {aid}: no EOI found after SOI, buf size={len(buf)}"
-                        # )
+                        buf = buf[offset:]
+                        offset = 0
                         if len(buf) > MAX_MJPEG:
-                            logger.warning(
-                                f"[relay] mjpeg {aid}: buf too large ({len(buf)}), clearing"
-                            )
-                            buf.clear()
+                            buf = b""
                         break
-                    frame = bytes(buf[: eoi + 2])
-                    del buf[: eoi + 2]
+                    if soi > offset:
+                        offset = soi
+                    eoi = buf.find(MJPEG_EOI, offset + 2)
+                    if eoi < 0:
+                        if len(buf) - offset > MAX_MJPEG:
+                            buf = buf[offset:]
+                            offset = 0
+                            if len(buf) > MAX_MJPEG:
+                                buf = b""
+                        break
+                    frame = buf[offset : eoi + 2]
+                    offset = eoi + 2
                     a.push_mjpeg(frame)
                     frame_count += 1
-                    # logger.debug(
-                    #     f"[relay] mjpeg {aid}: decoded frame #{frame_count}, size={len(frame)}, updated={a.updated}"
-                    # )
                     if frame_count % 10 == 0:
                         logger.info(
                             f"[relay] mjpeg {aid}: {frame_count} frames decoded so far"
@@ -450,23 +450,19 @@ async def stream_mjpeg(aid: str, _=Depends(require_viewer_auth)):
     a = await get_agent(aid)
 
     async def gen():
-        last = -1
-        if a.mjpeg_latest is None:
-            await a.wait_mjpeg(timeout=10.0)
         while True:
-            if a.mjpeg_count != last and a.mjpeg_latest is not None:
-                last = a.mjpeg_count
-                f = a.mjpeg_latest
-                yield (
-                    b"--" + BOUNDARY.encode() + b"\r\nContent-Type: image/jpeg\r\n"
-                    b"Content-Length: "
-                    + str(len(f)).encode()
-                    + b"\r\n\r\n"
-                    + f
-                    + b"\r\n"
-                )
-            else:
-                await a.wait_mjpeg(timeout=5.0)
+            try:
+                f = await asyncio.wait_for(a.get_mjpeg(), timeout=10.0)
+            except asyncio.TimeoutError:
+                continue
+            yield (
+                b"--" + BOUNDARY.encode() + b"\r\nContent-Type: image/jpeg\r\n"
+                b"Content-Length: "
+                + str(len(f)).encode()
+                + b"\r\n\r\n"
+                + f
+                + b"\r\n"
+            )
 
     return StreamingResponse(
         gen(),
@@ -631,26 +627,33 @@ async def compat_ingest(aid: str, request: Request):
     else:
         a.codec_current = "mjpeg"
         logger.info(f"[relay-compat] mjpeg <- {request.client.host} id={aid}")
-        buf = bytearray()
+        buf = b""
+        offset = 0
         try:
             async for chunk in request.stream():
                 if not chunk:
                     continue
-                buf.extend(chunk)
+                buf += chunk
                 while True:
-                    soi = buf.find(MJPEG_SOI)
+                    soi = buf.find(MJPEG_SOI, offset)
                     if soi < 0:
-                        buf.clear()
-                        break
-                    if soi > 0:
-                        del buf[:soi]
-                    eoi = buf.find(MJPEG_EOI, 2)
-                    if eoi < 0:
+                        buf = buf[offset:]
+                        offset = 0
                         if len(buf) > MAX_MJPEG:
-                            buf.clear()
+                            buf = b""
                         break
-                    frame = bytes(buf[: eoi + 2])
-                    del buf[: eoi + 2]
+                    if soi > offset:
+                        offset = soi
+                    eoi = buf.find(MJPEG_EOI, offset + 2)
+                    if eoi < 0:
+                        if len(buf) - offset > MAX_MJPEG:
+                            buf = buf[offset:]
+                            offset = 0
+                            if len(buf) > MAX_MJPEG:
+                                buf = b""
+                        break
+                    frame = buf[offset : eoi + 2]
+                    offset = eoi + 2
                     a.push_mjpeg(frame)
         except Exception as e:
             logger.error(f"[relay-compat] mjpeg {aid} err: {e}")

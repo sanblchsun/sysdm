@@ -1,6 +1,8 @@
 # app/main.py
 import os
+import asyncio
 from pathlib import Path
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -12,7 +14,17 @@ from app.api import web_cookie
 from app.middleware.auth_html import AuthHTMLMiddleware
 from app.api.agent import router as agent_router
 
-app = FastAPI(title="SysDM RMM")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(relay.cleanup_stale_agents())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+app = FastAPI(title="SysDM RMM", lifespan=lifespan)
 app.add_middleware(AuthHTMLMiddleware)
 
 # Статика и шаблоны
