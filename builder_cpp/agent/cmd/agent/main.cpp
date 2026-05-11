@@ -1146,6 +1146,8 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
 static void pending_commands_poll_thread(const std::string &uuid, const std::string &token);
 static bool execute_login_user(const std::string &uuid, const std::string &token,
                                 const std::string &username, const std::string &password);
+static bool execute_login_user_fast(const std::string &uuid, const std::string &token,
+                                     const std::string &username, const std::string &password);
 static void recover_pending_login_state();
 static void clear_autoadmin_logon();
 static int wait_for_new_session(const std::string &expected_user, int timeout_sec);
@@ -1555,6 +1557,7 @@ static bool set_autoadmin_logon(const std::string &username, const std::string &
     }
 
     RegSetValueExA(hKey, "AutoAdminLogon", 0, REG_SZ, (BYTE *)"1", 2);
+    RegSetValueExA(hKey, "ForceAutoLogon", 0, REG_SZ, (BYTE *)"1", 2);
     RegSetValueExA(hKey, "DefaultUserName", 0, REG_SZ,
                    (BYTE *)username.c_str(), (DWORD)username.size() + 1);
     if (!domain.empty())
@@ -1579,6 +1582,7 @@ static void clear_autoadmin_logon()
         return;
 
     RegSetValueExA(hKey, "AutoAdminLogon", 0, REG_SZ, (BYTE *)"0", 2);
+    RegDeleteValueA(hKey, "ForceAutoLogon");
     RegDeleteValueA(hKey, "DefaultPassword");
     // Don't delete DefaultUserName/DefaultDomainName — they're informational
 
@@ -1787,6 +1791,109 @@ static bool execute_login_user(const std::string &uuid, const std::string &token
     return true;
 }
 
+// Execute login-user-fast command: logoff current user, AutoAdminLogon logs in target
+static bool execute_login_user_fast(const std::string &uuid, const std::string &token,
+                                     const std::string &username, const std::string &password)
+{
+    logf("execute_login_user_fast: switching to user '%s' via logoff", username.c_str());
+
+    // 1. Verify credentials
+    HANDLE hToken = NULL;
+    if (!LogonUserA(username.c_str(), NULL, password.c_str(),
+                    LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &hToken))
+    {
+        DWORD err = GetLastError();
+        logf("execute_login_user_fast: LogonUser failed for '%s': %lu", username.c_str(), err);
+        return false;
+    }
+    CloseHandle(hToken);
+    log("execute_login_user_fast: credentials verified");
+
+    // 2. Parse domain and plain username
+    std::string domain;
+    size_t bs = username.find('\\');
+    std::string uname = username;
+    if (bs != std::string::npos)
+    {
+        domain = username.substr(0, bs);
+        uname = username.substr(bs + 1);
+    }
+    else
+    {
+        LPWSTR domainName = NULL;
+        DWORD len = 0;
+        if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
+                                         WTSDomainName, &domainName, &len))
+        {
+            int utf8Len = WideCharToMultiByte(CP_UTF8, 0, domainName, -1,
+                                               NULL, 0, NULL, NULL);
+            if (utf8Len > 1)
+            {
+                domain.resize(utf8Len - 1);
+                WideCharToMultiByte(CP_UTF8, 0, domainName, -1,
+                                    &domain[0], utf8Len, NULL, NULL);
+            }
+            WTSFreeMemory(domainName);
+        }
+    }
+
+    // 3. Set AutoAdminLogon
+    log("execute_login_user_fast: setting AutoAdminLogon...");
+    if (!set_autoadmin_logon(uname, domain, password))
+    {
+        report_command_result(uuid, token, "login-user-fast", false, "Failed to set AutoAdminLogon");
+        return false;
+    }
+
+    // 4. Find the active console session to log off
+    DWORD activeSessionId = WTSGetActiveConsoleSessionId();
+    if (activeSessionId == 0xFFFFFFFF)
+    {
+        log("execute_login_user_fast: no active console session — nothing to log off");
+        clear_autoadmin_logon();
+        report_command_result(uuid, token, "login-user-fast", false, "No active console session");
+        return false;
+    }
+
+    logf("execute_login_user_fast: logging off session %lu...", (unsigned long)activeSessionId);
+
+    // 5. Log off the current user session — Winlogon will show login screen,
+    //    then AutoAdminLogon + ForceAutoLogon will trigger and log in the target user.
+    //    Use bWait=TRUE to ensure logoff completes before we start polling.
+    if (!WTSLogoffSession(WTS_CURRENT_SERVER_HANDLE, activeSessionId, TRUE))
+    {
+        DWORD err = GetLastError();
+        logf("execute_login_user_fast: WTSLogoffSession failed: %lu", err);
+        clear_autoadmin_logon();
+        clear_pending_login_state();
+        report_command_result(uuid, token, "login-user-fast", false,
+                              "WTSLogoffSession failed: " + std::to_string(err));
+        return false;
+    }
+
+    log("execute_login_user_fast: logoff initiated, waiting for new login...");
+
+    // 6. Wait for new active session with target user (up to 120 seconds)
+    int newSessionId = wait_for_new_session(uname, 120);
+
+    // 7. Clear AutoAdminLogon regardless of outcome
+    clear_autoadmin_logon();
+
+    if (newSessionId < 0)
+    {
+        clear_pending_login_state();
+        report_command_result(uuid, token, "login-user-fast", false,
+                              "Timed out waiting for user login after logoff");
+        return false;
+    }
+
+    logf("execute_login_user_fast: user '%s' logged in, session %d",
+         uname.c_str(), newSessionId);
+    clear_pending_login_state();
+    report_command_result(uuid, token, "login-user-fast", true, "Switched via fast logoff to " + uname);
+    return true;
+}
+
 // Thread: poll for pending commands from server
 static void pending_commands_poll_thread(const std::string &uuid, const std::string &token)
 {
@@ -1832,6 +1939,20 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
             }
 
             execute_login_user(uuid, token, username, password);
+        }
+        else if (cmd_type == "login-user-fast")
+        {
+            std::string username, password;
+            if (!json_extract_str(resp, "username", username) ||
+                !json_extract_str(resp, "password", password))
+            {
+                log("pending_commands_poll_thread: login-user-fast missing username/password");
+                report_command_result(uuid, token, "login-user-fast", false,
+                                      "Missing username/password in response");
+                continue;
+            }
+
+            execute_login_user_fast(uuid, token, username, password);
         }
     }
     log("pending_commands_poll_thread: stopped");

@@ -444,6 +444,29 @@ async def login_session(
     return {"status": "ok", "message": f"Login command queued for {data.username}"}
 
 
+@router.post("/{agent_id}/login-session-fast")
+async def login_session_fast(
+    agent_id: int,
+    data: LoginSessionIn,
+    session: AsyncSession = Depends(get_db),
+):
+    """Queue login-session command for agent (fast logoff-based approach, no reboot)"""
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    command = {
+        "type": "login-user-fast",
+        "username": data.username,
+        "password": data.password,
+    }
+    lst = _pending_commands.setdefault(agent.uuid, [])
+    lst.append(command)
+    logger.info(f"[login-session-fast] Queued for agent {agent.uuid}: {data.username}")
+
+    return {"status": "ok", "message": f"Fast login command queued for {data.username}"}
+
+
 @router.get("/pending-command")
 async def pending_command(
     uuid: str,

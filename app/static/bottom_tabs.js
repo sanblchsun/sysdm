@@ -192,7 +192,8 @@ async function takeControl() {
 }
 
 // ==================== LOGIN SESSION (Switch Windows User) ====================
-async function loginSession() {
+// Reboot-based approach (safe, works always — but reboots the machine)
+async function loginSessionReboot() {
   const agentId = getAgentId();
   if (!agentId) return;
 
@@ -202,7 +203,7 @@ async function loginSession() {
   const password = prompt("Password for " + username + ":");
   if (!password) return;
 
-  if (!confirm(`Switch to user "${username}"? Current session will be disconnected.`)) return;
+  if (!confirm(`Switch to user "${username}"? The machine will REBOOT.`)) return;
 
   try {
     const response = await fetch(`/api/agent/${agentId}/login-session`, {
@@ -216,7 +217,40 @@ async function loginSession() {
     }
 
     const data = await response.json();
-    alert(`✓ ${data.message}\n\nThe agent will switch users within a few seconds.`);
+    alert(`✓ ${data.message}\n\nThe machine will reboot and log in as "${username}".`);
+  } catch (error) {
+    alert("Failed to send login command: " + error.message);
+  }
+
+  closeActionsMenu();
+}
+
+// Fast logoff-based approach (no reboot, but logsoff current user session)
+async function loginSessionFast() {
+  const agentId = getAgentId();
+  if (!agentId) return;
+
+  const username = prompt("Windows username (e.g. user@domain or DOMAIN\\user):");
+  if (!username) return;
+
+  const password = prompt("Password for " + username + ":");
+  if (!password) return;
+
+  if (!confirm(`Switch to user "${username}" via fast user switch? Current session will be logged off.`)) return;
+
+  try {
+    const response = await fetch(`/api/agent/${agentId}/login-session-fast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    }
+
+    const data = await response.json();
+    alert(`✓ ${data.message}\n\nThe agent will log off current user and log in as "${username}".`);
   } catch (error) {
     alert("Failed to send login command: " + error.message);
   }
