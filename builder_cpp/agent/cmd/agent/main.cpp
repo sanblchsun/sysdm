@@ -55,7 +55,7 @@ std::atomic<bool> g_stopRequested(false);
 std::string g_telemetryMode = "none";
 std::string g_agent_uuid;
 std::string g_agent_token;
-std::atomic<int> g_rdp_worker_timeout{0};
+std::atomic<int> g_rdp_worker_timeout{30};
 
 // Shared memory for activity monitoring (created by SYSTEM process, read by worker)
 static HANDLE g_shm_handle = NULL;
@@ -647,7 +647,7 @@ bool spawnRDPWorker()
             if (g_shm)
             {
                 g_shm->last_activity_time = GetTickCount64();
-                g_shm->timeout_min = 0;
+                g_shm->timeout_min = 30;
             }
             else
                 log("MapViewOfFile failed for activity shm");

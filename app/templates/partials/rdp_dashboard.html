@@ -227,7 +227,7 @@
       <label data-role="h264-only">br <input name="bitrate" value="4M"></label>
       <label data-role="mjpeg-only">q <input name="mjpeg_q" value="4" type="number" min="2" max="31"></label>
       <label>fps <input name="fps" value="30" type="number" min="1" max="120"></label>
-      <label title="Таймаут неактивности (мин), 0 = отключен">timeout <input name="rdp_timeout" value="0" type="number" min="0" max="1440"></label>
+      <label title="Таймаут неактивности (мин)">timeout <input name="rdp_timeout" value="30" type="number" min="1" max="1440"></label>
       <button type="button">Применить</button>
     </div>`;
         const name = el.querySelector("b");
@@ -349,7 +349,7 @@
           c.sel("bitrate").value = t.bitrate || "4M";
           c.sel("fps").value = t.fps || 30;
           c.sel("mjpeg_q").value = t.mjpeg_q || 4;
-          c.sel("rdp_timeout").value = t.rdp_timeout != null ? t.rdp_timeout : 0;
+          c.sel("rdp_timeout").value = t.rdp_timeout != null ? t.rdp_timeout : 30;
           c.applyCodecVisibility();
         }
 
