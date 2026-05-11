@@ -24,14 +24,7 @@
         object-fit: contain;
         background: #000;
       }
-      .hud {
-        position: fixed;
-        top: 8px;
-        left: 8px;
-        background: rgba(0, 0, 0, 0.45);
-        padding: 4px 8px;
-        border-radius: 4px;
-      }
+
       .err {
         position: fixed;
         top: 8px;
@@ -41,28 +34,17 @@
         border-radius: 4px;
         color: #fff;
       }
-      .ctrl {
-        position: fixed;
-        bottom: 8px;
-        left: 8px;
-        background: rgba(0, 0, 0, 0.45);
-        padding: 4px 8px;
-        border-radius: 4px;
-      }
+
     </style>
   </head>
   <body>
     <div id="container"></div>
-    <div class="hud" id="hud">loading…</div>
     <div class="err" id="err" style="display: none"></div>
-    <div class="ctrl" id="ctrl">ctrl: —</div>
 
     <script type="module">
       const qs = new URLSearchParams(location.search);
       const id = qs.get("id") || "agent1";
-      const hud = document.getElementById("hud");
       const err = document.getElementById("err");
-      const ctl = document.getElementById("ctrl");
       const box = document.getElementById("container");
 
       function showErr(t) {
@@ -110,11 +92,8 @@
         ctrlWs = new WebSocket(
           `${proto}://${location.host}/relay/ws/control/viewer/${encodeURIComponent(id)}`,
         );
-        ctrlWs.onopen = () => {
-          ctl.textContent = "ctrl: connected";
-        };
+        ctrlWs.onopen = () => {};
         ctrlWs.onclose = () => {
-          ctl.textContent = "ctrl: offline";
           heldKeys.clear();
           ctrlWs = null;
           setTimeout(openCtrlWS, 2000);
@@ -133,7 +112,6 @@
           }
           if (d.type === "hello") {
             agentScreen = { w: d.screen_w | 0, h: d.screen_h | 0 };
-            ctl.textContent = `ctrl: ${agentScreen.w}×${agentScreen.h}`;
           } else if (d.type === "clipboard") {
             // Буфер обмена агента изменился — кладём в свой.
             // В Chrome это требует secure-context: работает на localhost и https.
@@ -390,9 +368,6 @@
           `${proto}://${location.host}/relay/ws/stream/h264/${encodeURIComponent(id)}`,
         );
         ws.binaryType = "arraybuffer";
-        ws.onopen = () =>
-          (hud.textContent = "h264: connected, waiting keyframe…");
-        ws.onclose = () => (hud.textContent = "h264: disconnected");
         ws.onerror = () => showErr("WebSocket error");
         ws.onmessage = (ev) => {
           const add = new Uint8Array(ev.data);
@@ -487,12 +462,6 @@
             dec.configure(cfg);
             decoder = dec;
             waitingKey = false;
-            hud.textContent =
-              `h264: decoder configured (${cfg.codec}` +
-              (cfg.hardwareAcceleration
-                ? `, ${cfg.hardwareAcceleration}`
-                : "") +
-              `)`;
             try {
               dec.decode(
                 new EncodedVideoChunk({
@@ -550,9 +519,6 @@
           frames++;
           const dt = performance.now() - t0;
           if (dt > 1000) {
-            const fps = ((frames * 1000) / dt).toFixed(1);
-            const mbps = ((bytes * 8) / 1e6 / (dt / 1000)).toFixed(2);
-            hud.textContent = `h264  ${fps} fps  ${mbps} Mbit/s`;
             frames = 0;
             bytes = 0;
             t0 = performance.now();
@@ -573,8 +539,7 @@
             w: img.naturalWidth,
             h: img.naturalHeight,
           }));
-          img.onload = () =>
-            (hud.textContent = `mjpeg  ${img.naturalWidth}×${img.naturalHeight}`);
+          img.onload = () => {};
         } else {
           box.innerHTML = `<canvas id="media"></canvas>`;
           const cv = document.getElementById("media");
