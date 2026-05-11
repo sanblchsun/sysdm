@@ -139,6 +139,15 @@
   content: "\0F10CF";
 }
 
+.icon-uac::before {
+  color: #0d62c4;
+  content: "\0F0759";
+}
+
+.icon-switch::before {
+  content: "\0F0019";
+}
+
 .online-dot {
   display: inline-block;
   width: 10px;

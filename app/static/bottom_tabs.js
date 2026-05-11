@@ -129,6 +129,32 @@ async function disableUAC() {
   if (btn) btn.setAttribute("aria-expanded", "false");
 }
 
+// ==================== REBOOT AGENT ====================
+async function rebootAgent() {
+  const agentId = getAgentId();
+  if (!agentId) return;
+
+  if (!confirm("Reboot this machine? All running applications will be closed.")) return;
+
+  try {
+    const response = await fetch(`/api/agent/${agentId}/reboot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    }
+
+    const data = await response.json();
+    alert(`✓ ${data.message}`);
+  } catch (error) {
+    alert("Failed to send reboot command: " + error.message);
+  }
+
+  closeActionsMenu();
+}
+
 // Load selected agents from localStorage
 function getSelectedAgents() {
   const data = localStorage.getItem("rdp_selected_agents");

@@ -382,6 +382,31 @@ async def control_uac(
     }
 
 
+@router.post("/{agent_id}/reboot")
+async def agent_reboot(
+    agent_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Send reboot command to agent"""
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    command = {"type": "command", "cmd": "reboot"}
+    agent_connected = await send_command_to_agent(agent.uuid, command)
+
+    message = "Reboot command sent to agent"
+    if not agent_connected:
+        message = "Agent is not currently connected via WebSocket"
+        logger.warning(f"[reboot] Agent {agent.uuid} not connected")
+
+    return {
+        "status": "ok",
+        "message": message,
+        "agent_connected": agent_connected,
+    }
+
+
 @router.post("/{agent_id}/start-rdp")
 async def start_rdp(
     agent_id: int,

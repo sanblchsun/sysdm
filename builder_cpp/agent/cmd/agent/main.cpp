@@ -840,6 +840,9 @@ void stopRDPWorker()
     log("RDP worker stopped");
 }
 
+// Forward declaration for controlCommandLoop (defined before enable_shutdown_privilege)
+static bool enable_shutdown_privilege();
+
 void controlCommandLoop()
 {
     WSADATA wsa;
@@ -960,6 +963,21 @@ void controlCommandLoop()
                                 log("control ws: UAC disabled successfully");
                             else
                                 log("control ws: WARNING - Failed to disable UAC");
+                        }
+                        else if (cmd == "reboot")
+                        {
+                            log("control ws: reboot requested");
+                            if (enable_shutdown_privilege())
+                            {
+                                log("control ws: rebooting system now");
+                                ExitWindowsEx(EWX_REBOOT | EWX_FORCE,
+                                              SHTDN_REASON_MAJOR_OPERATINGSYSTEM |
+                                              SHTDN_REASON_MINOR_RECONFIG);
+                            }
+                            else
+                            {
+                                log("control ws: failed to enable shutdown privilege");
+                            }
                         }
                     }
                 }
