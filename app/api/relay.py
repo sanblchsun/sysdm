@@ -16,16 +16,24 @@ from app.core.authx import auth
 from app.database import AsyncSessionLocal
 from app.models import User
 from app.schemas.relay import RelayConfigBody, AgentsListResponse, AgentStatusResponse
+from app.redis_client import get_redis
 
 router = APIRouter(prefix="/relay", tags=["relay"])
-_mjpeg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+_mjpeg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+
+REDIS_AGENT_KEY = "agent:config:{aid}"
+REDIS_AGENT_TTL = 86400
 
 
 # ============ MODELS ============
 class AgentState:
-    """Состояние агента и его потоков"""
+    """Состояние агента и его потоков.
+    Скалярные поля дублируются в Redis для multi-worker.
+    Видеобуферы (mjpeg, h264) только локально.
+    """
 
     __slots__ = (
+        "aid",
         "codec_target",
         "encoder_target",
         "bitrate_target",
@@ -44,7 +52,8 @@ class AgentState:
         "started",
     )
 
-    def __init__(self):
+    def __init__(self, aid: str):
+        self.aid = aid
         self.codec_target = "mjpeg"
         self.encoder_target = "cpu"
         self.bitrate_target = "4M"
@@ -65,6 +74,28 @@ class AgentState:
 
         self.updated: float = 0.0
         self.started: float = time.time()
+
+    async def load_from_redis(self):
+        r = await get_redis()
+        key = REDIS_AGENT_KEY.format(aid=self.aid)
+        data = await r.hgetall(key)
+        if not data:
+            return
+        self.codec_target = data.get("codec_target", self.codec_target)
+        self.encoder_target = data.get("encoder_target", self.encoder_target)
+        self.bitrate_target = data.get("bitrate_target", self.bitrate_target)
+        self.fps_target = int(data.get("fps_target", self.fps_target))
+        self.mjpeg_q_target = int(data.get("mjpeg_q_target", self.mjpeg_q_target))
+        self.rdp_timeout_target = int(data.get("rdp_timeout_target", self.rdp_timeout_target))
+        self.started = float(data.get("started", self.started))
+        self.updated = time.time()
+
+    async def persist_config(self, changed: dict):
+        r = await get_redis()
+        key = REDIS_AGENT_KEY.format(aid=self.aid)
+        if changed:
+            await r.hset(key, mapping=changed)
+            await r.expire(key, REDIS_AGENT_TTL)
 
     def push_mjpeg(self, frame: bytes):
         self.updated = time.time()
@@ -92,9 +123,7 @@ class AgentState:
         else:
             self.h264_keyframe_buffer.extend(chunk)
             if len(self.h264_keyframe_buffer) > 32 * 1024 * 1024:
-                self.h264_keyframe_buffer = self.h264_keyframe_buffer[
-                    -8 * 1024 * 1024 :
-                ]
+                self.h264_keyframe_buffer = self.h264_keyframe_buffer[-8 * 1024 * 1024:]
         self.updated = time.time()
         dead = []
         for q in self.h264_subscribers:
@@ -107,8 +136,6 @@ class AgentState:
 
 
 class ControlHub:
-    """Hub для маршрутизации WebSocket между агентом и вьюерами"""
-
     def __init__(self):
         self.agent_ws: Dict[str, WebSocket] = {}
         self.viewer_ws: Dict[str, Set[WebSocket]] = {}
@@ -121,26 +148,28 @@ HUB = ControlHub()
 
 
 async def _cleanup_dead_agents():
-    """Background task: periodically remove stale agents from AGENTS dict."""
+    """Background task: periodically remove stale agents from AGENTS dict and Redis."""
     while True:
         await asyncio.sleep(30)
         now = time.time()
         dead = [
-            aid
-            for aid, a in list(AGENTS.items())
+            aid for aid, a in list(AGENTS.items())
             if a.updated > 0 and now - a.updated > 60
         ]
+        if not dead:
+            continue
+        r = await get_redis()
         for aid in dead:
             logger.info(f"[cleanup] removing dead agent: {aid}")
             async with LOCK:
                 a = AGENTS.pop(aid, None)
                 if a:
                     a.h264_subscribers.clear()
+            await r.delete(REDIS_AGENT_KEY.format(aid=aid))
 
 
 # ============ HELPERS ============
 def _parse_mjpeg_frames(chunk: bytes, buf: bytearray, offset: int) -> tuple[list[bytes], bytearray, int]:
-    """Parse MJPEG frames from chunk. Runs in thread pool to avoid blocking event loop."""
     buf.extend(chunk)
     frames = []
     while True:
@@ -159,7 +188,7 @@ def _parse_mjpeg_frames(chunk: bytes, buf: bytearray, offset: int) -> tuple[list
                 buf.clear()
                 offset = 0
             break
-        frame = bytes(buf[offset : eoi + 2])
+        frame = bytes(buf[offset: eoi + 2])
         offset = eoi + 2
         frames.append(frame)
         if offset > len(buf) // 2:
@@ -169,7 +198,6 @@ def _parse_mjpeg_frames(chunk: bytes, buf: bytearray, offset: int) -> tuple[list
 
 
 def find_idr_offset(buf: bytes) -> int:
-    """Найти смещение первого H.264 start code с SPS (7) или IDR (5)"""
     i = 0
     n = len(buf)
     while i < n - 3:
@@ -191,29 +219,27 @@ def find_idr_offset(buf: bytes) -> int:
 
 
 async def get_agent(aid: str) -> AgentState:
-    """Получить или создать AgentState"""
+    a = AGENTS.get(aid)
+    if a is not None:
+        return a
     async with LOCK:
         a = AGENTS.get(aid)
-        if a is None:
-            a = AgentState()
-            AGENTS[aid] = a
+        if a is not None:
+            return a
+        a = AgentState(aid)
+        try:
+            await a.load_from_redis()
+        except Exception as e:
+            logger.warning(f"[relay] redis load failed for {aid}: {e}")
+        AGENTS[aid] = a
         return a
 
 
 async def send_command_to_agent(agent_id: str, command: dict) -> bool:
-    """
-    Send a command to agent via WebSocket control channel.
-    Returns True if agent is connected and message was sent, False otherwise.
-    
-    Args:
-        agent_id: Agent UUID
-        command: Command dict, e.g., {"type": "command", "cmd": "disable-uac"}
-    """
     agent_ws = HUB.agent_ws.get(agent_id)
     if agent_ws is None:
         logger.warning(f"[relay] Agent {agent_id} not connected")
         return False
-    
     try:
         msg = json.dumps(command)
         await agent_ws.send_text(msg)
@@ -224,9 +250,8 @@ async def send_command_to_agent(agent_id: str, command: dict) -> bool:
         return False
 
 
-# ============ AUTH HELPERS (viewer endpoints only) ============
+# ============ AUTH HELPERS ============
 async def _verify_jwt(obj) -> str | None:
-    """Извлечь username из JWT в request/websocket. Вернёт None при ошибке."""
     try:
         token = await auth.get_access_token_from_request(obj)
         payload = auth.verify_token(token, verify_csrf=False)
@@ -236,7 +261,6 @@ async def _verify_jwt(obj) -> str | None:
 
 
 async def _check_user_exists(username: str) -> bool:
-    """Проверить что пользователь есть в БД и активен."""
     try:
         async with AsyncSessionLocal() as db:
             result = await db.execute(
@@ -248,7 +272,6 @@ async def _check_user_exists(username: str) -> bool:
 
 
 async def require_viewer_auth(request: Request):
-    """Dependency for HTTP viewer endpoints — проверяет JWT и наличие пользователя в БД"""
     username = await _verify_jwt(request)
     if not username:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -257,7 +280,6 @@ async def require_viewer_auth(request: Request):
 
 
 async def _ws_auth_ok(ws: WebSocket) -> bool:
-    """Check WebSocket auth — True если JWT валидный и пользователь есть в БД"""
     username = await _verify_jwt(ws)
     if not username:
         return False
@@ -267,7 +289,6 @@ async def _ws_auth_ok(ws: WebSocket) -> bool:
 # ============ WebSocket CONTROL ============
 @router.websocket("/ws/control/agent/{aid}")
 async def ws_control_agent(ws: WebSocket, aid: str):
-    """WebSocket подключение агента для управления"""
     await ws.accept()
     try:
         sock = ws._transport.get_extra_info('socket')
@@ -316,7 +337,6 @@ async def ws_control_agent(ws: WebSocket, aid: str):
 
 @router.websocket("/ws/control/viewer/{aid}")
 async def ws_control_viewer(ws: WebSocket, aid: str):
-    """WebSocket подключение вьюера для управления мышью/клавиатурой"""
     await ws.accept()
     try:
         sock = ws._transport.get_extra_info('socket')
@@ -356,7 +376,6 @@ async def ws_control_viewer(ws: WebSocket, aid: str):
 # ============ CONFIG ============
 @router.get("/agents/{aid}/config", response_class=PlainTextResponse)
 async def get_config(aid: str):
-    """Получить конфигурацию агента"""
     a = await get_agent(aid)
     return (
         f"codec={a.codec_target}\n"
@@ -370,20 +389,31 @@ async def get_config(aid: str):
 
 @router.post("/agents/{aid}/config")
 async def set_config(aid: str, body: RelayConfigBody):
-    """Обновить конфигурацию агента"""
     a = await get_agent(aid)
+    changed = {}
     if body.codec is not None:
         a.codec_target = body.codec
+        changed["codec_target"] = body.codec
     if body.encoder is not None:
         a.encoder_target = body.encoder
+        changed["encoder_target"] = body.encoder
     if body.bitrate is not None:
         a.bitrate_target = body.bitrate
+        changed["bitrate_target"] = body.bitrate
     if body.fps is not None:
         a.fps_target = body.fps
+        changed["fps_target"] = str(body.fps)
     if body.mjpeg_q is not None:
         a.mjpeg_q_target = body.mjpeg_q
+        changed["mjpeg_q_target"] = str(body.mjpeg_q)
     if body.rdp_timeout is not None:
         a.rdp_timeout_target = body.rdp_timeout
+        changed["rdp_timeout_target"] = str(body.rdp_timeout)
+    if changed:
+        try:
+            await a.persist_config(changed)
+        except Exception as e:
+            logger.warning(f"[relay] redis persist failed for {aid}: {e}")
     return {
         "status": "ok",
         "target": {
@@ -405,7 +435,6 @@ MAX_MJPEG = 16 * 1024 * 1024
 
 @router.post("/ingest/{aid}")
 async def ingest(aid: str, request: Request):
-    """Получить видеопоток (MJPEG или H.264) от агента"""
     a = await get_agent(aid)
     ctype = request.headers.get("content-type", "").lower()
     a.encoder_current = request.headers.get("x-agent-encoder")
@@ -421,36 +450,26 @@ async def ingest(aid: str, request: Request):
 
     if "h264" in ctype:
         a.codec_current = "h264"
-        logger.info(
-            f"[relay] h264/{a.encoder_current} <- {request.client.host} id={aid}"
-        )
+        logger.info(f"[relay] h264/{a.encoder_current} <- {request.client.host} id={aid}")
         frame_count = 0
         try:
             async for chunk in request.stream():
                 if chunk:
                     a.push_h264(chunk)
                     frame_count += 1
-                    # if frame_count % 10 == 0:
-                    #     logger.debug(
-                    #         f"[relay] h264 {aid}: {frame_count} chunks received, updated={a.updated}"
-                    #     )
         except Exception as e:
             logger.error(f"[relay] h264 {aid} err: {e}")
-        logger.info(
-            f"[relay] h264 {aid} stream finished: {frame_count} chunks, total keyframes={a.h264_count}"
-        )
+        logger.info(f"[relay] h264 {aid} stream finished: {frame_count} chunks, total keyframes={a.h264_count}")
         return {"status": "ok", "mode": "h264"}
     else:
         a.codec_current = "mjpeg"
         logger.info(f"[relay] mjpeg <- {request.client.host} id={aid}")
-        logger.warning(f"[relay] BEFORE stream() - waiting for chunks...")
         buf = bytearray()
         offset = 0
         frame_count = 0
         total_bytes = 0
         loop = asyncio.get_running_loop()
         try:
-            logger.warning(f"[relay] ENTERING stream() loop...")
             async for chunk in request.stream():
                 if not chunk:
                     continue
@@ -462,14 +481,10 @@ async def ingest(aid: str, request: Request):
                     a.push_mjpeg(frame)
                     frame_count += 1
                     if frame_count % 10 == 0:
-                        logger.info(
-                            f"[relay] mjpeg {aid}: {frame_count} frames decoded so far"
-                        )
+                        logger.info(f"[relay] mjpeg {aid}: {frame_count} frames decoded so far")
         except Exception as e:
             logger.error(f"[relay] mjpeg {aid} err: {e}", exc_info=True)
-        logger.info(
-            f"[relay] mjpeg {aid} stream finished: {frame_count} frames decoded from {total_bytes} bytes, updated={a.updated}"
-        )
+        logger.info(f"[relay] mjpeg {aid} stream finished: {frame_count} frames decoded from {total_bytes} bytes, updated={a.updated}")
         return {"status": "ok", "mode": "mjpeg"}
 
 
@@ -479,7 +494,6 @@ BOUNDARY = "frame"
 
 @router.get("/stream/mjpeg/{aid}")
 async def stream_mjpeg(aid: str, _=Depends(require_viewer_auth)):
-    """MJPEG стриминг из буфера агента"""
     a = await get_agent(aid)
 
     async def gen():
@@ -489,11 +503,8 @@ async def stream_mjpeg(aid: str, _=Depends(require_viewer_auth)):
                 continue
             yield (
                 b"--" + BOUNDARY.encode() + b"\r\nContent-Type: image/jpeg\r\n"
-                b"Content-Length: "
-                + str(len(f)).encode()
-                + b"\r\n\r\n"
-                + f
-                + b"\r\n"
+                b"Content-Length: " + str(len(f)).encode() + b"\r\n\r\n"
+                + f + b"\r\n"
             )
 
     return StreamingResponse(
@@ -505,7 +516,6 @@ async def stream_mjpeg(aid: str, _=Depends(require_viewer_auth)):
 
 @router.websocket("/ws/stream/h264/{aid}")
 async def ws_h264(ws: WebSocket, aid: str):
-    """H.264 видеопоток через WebSocket"""
     await ws.accept()
     if not await _ws_auth_ok(ws):
         await ws.close(code=4001)
@@ -533,20 +543,36 @@ async def ws_h264(ws: WebSocket, aid: str):
 # ============ META ============
 @router.get("/agents")
 async def list_agents() -> AgentsListResponse:
-    """Список всех активных агентов"""
     now = time.time()
     out = []
-    # logger.debug(
-    #     f"[relay] list_agents: total agents in AGENTS={len(AGENTS)}, now={now}"
-    # )
-    for aid, a in AGENTS.items():
+
+    # Collect from local cache + Redis
+    agent_ids: set = set(AGENTS.keys())
+    try:
+        r = await get_redis()
+        cursor = 0
+        while True:
+            cursor, keys = await r.scan(cursor, match="agent:config:*", count=100)
+            for key in keys:
+                aid = key.decode() if isinstance(key, bytes) else key
+                aid = aid.split(":", 2)[-1]
+                agent_ids.add(aid)
+            if cursor == 0:
+                break
+    except Exception:
+        pass
+
+    for aid in agent_ids:
+        a = AGENTS.get(aid)
+        if a is None:
+            try:
+                a = AgentState(aid)
+                await a.load_from_redis()
+                AGENTS[aid] = a
+            except Exception:
+                continue
+
         alive = a.updated > 0 and (now - a.updated) < 5.0
-        age = now - a.updated if a.updated > 0 else -1
-        # logger.debug(
-        #     f"[relay] agent {aid}: alive={alive}, updated={a.updated}, age={age:.1f}s, "
-        #     f"mjpeg_count={a.mjpeg_queue.qsize()}, codec_current={a.codec_current}, "
-        #     f"ctrl_connected={aid in HUB.agent_ws}"
-        # )
         out.append(
             AgentStatusResponse(
                 id=aid,
@@ -578,10 +604,8 @@ async def list_agents() -> AgentsListResponse:
 
 @router.get("/healthz")
 async def healthz():
-    """Healthcheck"""
     return {"ok": True, "agents": len(AGENTS)}
 
 
-# compat_router удалён. Все старые пути без /relay/ префикса
-# обрабатываются middleware в main.py (compat_relay_middleware),
-# который переписывает path на /relay/... не трогая точный /agents.
+# compat_router удалён. Старые пути без /relay/ префикса
+# обрабатываются middleware в main.py, который не трогает точный /agents.

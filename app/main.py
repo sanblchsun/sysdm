@@ -47,6 +47,11 @@ async def compat_relay_middleware(request: Request, call_next):
 async def startup():
     asyncio.create_task(relay._cleanup_dead_agents())
 
+@app.on_event("shutdown")
+async def shutdown():
+    from app.redis_client import close_redis
+    await close_redis()
+
 
 # API
 app.include_router(web_cookie.router, tags=["web"])

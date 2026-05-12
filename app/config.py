@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER_PASSWORD: str
     DISABLE_IP_FILTER: bool = False
 
+    # === Redis ===
+    REDIS_HOST: str = "127.0.0.1"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+
     # === Директории ===
     LOG_DIR: str
     UPLOAD_DIR: str
