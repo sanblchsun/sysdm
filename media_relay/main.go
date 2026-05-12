@@ -158,6 +158,27 @@ func (a *AgentStream) cacheSPSPPS(nalus [][]byte) {
 	}
 }
 
+// sendNalu builds a sample from SPS/PPS + one frame NALU and writes to all tracks
+func (a *AgentStream) sendNalu(nalu []byte) {
+	if len(a.tracks) == 0 {
+		return
+	}
+	sample := make([]byte, 0, len(nalu)+64)
+	if a.spsCache != nil {
+		sample = append(sample, 0, 0, 0, 1)
+		sample = append(sample, a.spsCache...)
+	}
+	if a.ppsCache != nil {
+		sample = append(sample, 0, 0, 0, 1)
+		sample = append(sample, a.ppsCache...)
+	}
+	sample = append(sample, 0, 0, 0, 1)
+	sample = append(sample, nalu...)
+	for _, pt := range a.tracks {
+		a.writeSampleTo(pt, sample)
+	}
+}
+
 func (a *AgentStream) feed(data []byte) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -195,41 +216,16 @@ func (a *AgentStream) feed(data []byte) {
 		return
 	}
 
-	// check for frame data
-	hasFrame := false
+	// send each frame NALU as an individual sample (one WriteSample per NALU)
 	for _, nalu := range nalus {
-		if len(nalu) > 0 {
-			typ := nalu[0] & 0x1f
-			if typ == 1 || typ == 5 {
-				hasFrame = true
-				break
-			}
-		}
-	}
-	if !hasFrame {
-		return
-	}
-
-	// build Annex B: cached SPS/PPS + frame NALUs
-	var sample []byte
-	if a.spsCache != nil {
-		sample = append(sample, 0, 0, 0, 1)
-		sample = append(sample, a.spsCache...)
-	}
-	if a.ppsCache != nil {
-		sample = append(sample, 0, 0, 0, 1)
-		sample = append(sample, a.ppsCache...)
-	}
-	for _, nalu := range nalus {
-		typ := nalu[0] & 0x1f
-		if typ == 7 || typ == 8 {
+		if len(nalu) == 0 {
 			continue
 		}
-		sample = append(sample, 0, 0, 0, 1)
-		sample = append(sample, nalu...)
-	}
-	for _, pt := range a.tracks {
-		a.writeSampleTo(pt, sample)
+		typ := nalu[0] & 0x1f
+		if typ != 1 && typ != 5 {
+			continue
+		}
+		a.sendNalu(nalu)
 	}
 }
 
@@ -268,20 +264,49 @@ func (a *AgentStream) sendKeyframeTo(pt *peerTrack) {
 		return
 	}
 
-	var sample []byte
+	// send cached SPS/PPS first
 	if a.spsCache != nil {
-		sample = append(sample, 0, 0, 0, 1)
+		sample := []byte{0, 0, 0, 1}
 		sample = append(sample, a.spsCache...)
-	}
-	if a.ppsCache != nil {
-		sample = append(sample, 0, 0, 0, 1)
-		sample = append(sample, a.ppsCache...)
-	}
-	if len(a.keyBufRaw) > 0 {
-		sample = append(sample, a.keyBufRaw...)
-	}
-	if len(sample) > 0 {
+		if a.ppsCache != nil {
+			sample = append(sample, 0, 0, 0, 1)
+			sample = append(sample, a.ppsCache...)
+		}
+		log.Printf("[sendKeyframe] sending SPS/PPS (%d bytes) to new peer", len(sample))
 		a.writeSampleTo(pt, sample)
+	}
+
+	// then find and send each frame NALU from raw buffer
+	if len(a.keyBufRaw) > 0 {
+		nalus := findNALUs(a.keyBufRaw)
+		count := 0
+		for _, nalu := range nalus {
+			if len(nalu) == 0 {
+				continue
+			}
+			typ := nalu[0] & 0x1f
+			if typ != 1 && typ != 5 {
+				continue
+			}
+			// build sample with cached SPS/PPS + this NALU
+			sample := make([]byte, 0, len(nalu)+64)
+			if a.spsCache != nil {
+				sample = append(sample, 0, 0, 0, 1)
+				sample = append(sample, a.spsCache...)
+			}
+			if a.ppsCache != nil {
+				sample = append(sample, 0, 0, 0, 1)
+				sample = append(sample, a.ppsCache...)
+			}
+			sample = append(sample, 0, 0, 0, 1)
+			sample = append(sample, nalu...)
+			a.writeSampleTo(pt, sample)
+			count++
+			if count >= 30 {
+				break
+			}
+		}
+		log.Printf("[sendKeyframe] sent %d frames to new peer", count)
 	}
 }
 
@@ -391,10 +416,19 @@ func handleIngest(w http.ResponseWriter, r *http.Request) {
 	go heartbeatLoop(hbDone, id)
 	defer close(hbDone)
 
+	first := true
 	buf := make([]byte, 65536)
 	for {
 		n, err := r.Body.Read(buf)
 		if n > 0 {
+			if first {
+				d := buf[:n]
+				if len(d) > 16 {
+					d = d[:16]
+				}
+				log.Printf("[ingest] first chunk: %d bytes, hex=% x", n, d)
+				first = false
+			}
 			a.feed(buf[:n])
 		}
 		if err != nil {
@@ -511,7 +545,15 @@ func handleOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[webrtc] %s answer done (media lines: %d candidates)", id, strings.Count(ld.SDP, "a=candidate"))
+	// Log relevant SDP lines
+	plID := ""
+	for _, line := range strings.Split(ld.SDP, "\n") {
+		if strings.Contains(line, "profile-level-id") {
+			plID = strings.TrimSpace(line)
+		}
+	}
+	log.Printf("[webrtc] %s answer done (candidates: %d, profile-level-id: %s)",
+		id, strings.Count(ld.SDP, "a=candidate"), plID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sdpPayload{SDP: ld.SDP})
