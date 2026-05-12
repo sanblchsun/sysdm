@@ -36,6 +36,7 @@ class AgentStatusResponse(BaseModel):
     ctrl_connected: bool
     target: dict
     current: dict
+    elapsed: float = 0.0
 
 
 class AgentsListResponse(BaseModel):

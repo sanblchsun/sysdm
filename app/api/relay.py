@@ -50,6 +50,7 @@ class AgentState:
         "h264_count",
         "updated",
         "started",
+        "_last_redis_sync",
     )
 
     def __init__(self, aid: str):
@@ -74,12 +75,14 @@ class AgentState:
 
         self.updated: float = 0.0
         self.started: float = time.time()
+        self._last_redis_sync: float = 0.0
 
     async def load_from_redis(self):
         r = await get_redis()
         key = REDIS_AGENT_KEY.format(aid=self.aid)
         data = await r.hgetall(key)
         if not data:
+            self.updated = time.time()
             return
         self.codec_target = data.get("codec_target", self.codec_target)
         self.encoder_target = data.get("encoder_target", self.encoder_target)
@@ -88,7 +91,29 @@ class AgentState:
         self.mjpeg_q_target = int(data.get("mjpeg_q_target", self.mjpeg_q_target))
         self.rdp_timeout_target = int(data.get("rdp_timeout_target", self.rdp_timeout_target))
         self.started = float(data.get("started", self.started))
-        self.updated = time.time()
+        upd = data.get("updated")
+        if upd:
+            parsed = float(upd)
+            self.updated = parsed if time.time() - parsed < 60 else time.time()
+        else:
+            self.updated = time.time()
+        self.codec_current = data.get("codec_current") or None
+        self.encoder_current = data.get("encoder_current") or None
+        self.bitrate_current = data.get("bitrate_current") or None
+        fps = data.get("fps_current")
+        self.fps_current = int(fps) if fps else None
+
+    async def persist_runtime(self):
+        r = await get_redis()
+        key = REDIS_AGENT_KEY.format(aid=self.aid)
+        await r.hset(key, mapping={
+            "codec_current": self.codec_current or "",
+            "encoder_current": self.encoder_current or "",
+            "bitrate_current": self.bitrate_current or "",
+            "fps_current": str(self.fps_current) if self.fps_current else "",
+            "updated": str(self.updated),
+        })
+        await r.expire(key, REDIS_AGENT_TTL)
 
     async def persist_config(self, changed: dict):
         r = await get_redis()
@@ -160,12 +185,16 @@ async def _cleanup_dead_agents():
             continue
         r = await get_redis()
         for aid in dead:
+            key = REDIS_AGENT_KEY.format(aid=aid)
+            redis_upd = await r.hget(key, "updated")
+            if redis_upd and time.time() - float(redis_upd) < 120:
+                continue
             logger.info(f"[cleanup] removing dead agent: {aid}")
             async with LOCK:
                 a = AGENTS.pop(aid, None)
                 if a:
                     a.h264_subscribers.clear()
-            await r.delete(REDIS_AGENT_KEY.format(aid=aid))
+            await r.delete(key)
 
 
 # ============ HELPERS ============
@@ -450,6 +479,8 @@ async def ingest(aid: str, request: Request):
 
     if "h264" in ctype:
         a.codec_current = "h264"
+        a.updated = time.time()
+        await a.persist_runtime()
         logger.info(f"[relay] h264/{a.encoder_current} <- {request.client.host} id={aid}")
         frame_count = 0
         try:
@@ -457,12 +488,17 @@ async def ingest(aid: str, request: Request):
                 if chunk:
                     a.push_h264(chunk)
                     frame_count += 1
+                    if frame_count % 300 == 0 and time.time() - a._last_redis_sync > 15:
+                        a._last_redis_sync = time.time()
+                        await a.persist_runtime()
         except Exception as e:
             logger.error(f"[relay] h264 {aid} err: {e}")
         logger.info(f"[relay] h264 {aid} stream finished: {frame_count} chunks, total keyframes={a.h264_count}")
         return {"status": "ok", "mode": "h264"}
     else:
         a.codec_current = "mjpeg"
+        a.updated = time.time()
+        await a.persist_runtime()
         logger.info(f"[relay] mjpeg <- {request.client.host} id={aid}")
         buf = bytearray()
         offset = 0
@@ -480,6 +516,9 @@ async def ingest(aid: str, request: Request):
                 for frame in frames:
                     a.push_mjpeg(frame)
                     frame_count += 1
+                    if frame_count % 10 == 0 and time.time() - a._last_redis_sync > 15:
+                        a._last_redis_sync = time.time()
+                        await a.persist_runtime()
                     if frame_count % 10 == 0:
                         logger.info(f"[relay] mjpeg {aid}: {frame_count} frames decoded so far")
         except Exception as e:
@@ -566,17 +605,24 @@ async def list_agents() -> AgentsListResponse:
         a = AGENTS.get(aid)
         if a is None:
             try:
-                a = AgentState(aid)
-                await a.load_from_redis()
-                AGENTS[aid] = a
+                async with LOCK:
+                    a = AGENTS.get(aid)
+                    if a is not None:
+                        pass
+                    else:
+                        a = AgentState(aid)
+                        await a.load_from_redis()
+                        AGENTS[aid] = a
             except Exception:
                 continue
 
-        alive = a.updated > 0 and (now - a.updated) < 5.0
+        alive = a.updated > 0 and (now - a.updated) < 30.0
+        elapsed = now - a.updated if a.updated > 0 else 999.0
         out.append(
             AgentStatusResponse(
                 id=aid,
                 alive=alive,
+                elapsed=round(elapsed, 1),
                 uptime_s=round(now - a.started, 1),
                 mjpeg_frames=a.mjpeg_queue.qsize(),
                 h264_keyframes=a.h264_count,

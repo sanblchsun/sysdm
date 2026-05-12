@@ -32,6 +32,8 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     container_name: sysdm_api
+    # Для multi-worker: docker compose up --scale app=4
+    # И раскомментировать upstream sysdm_cluster в nginx/default.conf
     ports:
       - "${APP_PORT}:${APP_PORT}"
     environment:
