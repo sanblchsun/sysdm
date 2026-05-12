@@ -29,10 +29,37 @@ from app.utils.hash import sha256_file
 from fastapi import Body
 from app.config import settings
 from app.api.relay import get_agent, send_command_to_agent
+from app.redis_client import get_redis
+import json
 
 # -------------------- TOP PANEL --------------------
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 UPDATE_INTERVAL = timedelta(seconds=60)
+
+# ==================== PENDING COMMANDS (multi-worker via Redis) ====================
+REDIS_PENDING_CMD_KEY = "pending_cmd:{uuid}"
+REDIS_PENDING_RESULT_KEY = "pending_result:{uuid}"
+REDIS_PENDING_TTL = 300
+
+async def _push_pending_command(uuid: str, command: dict):
+    r = await get_redis()
+    key = REDIS_PENDING_CMD_KEY.format(uuid=uuid)
+    await r.rpush(key, json.dumps(command))
+    await r.expire(key, REDIS_PENDING_TTL)
+
+async def _pop_pending_command(uuid: str) -> dict | None:
+    r = await get_redis()
+    key = REDIS_PENDING_CMD_KEY.format(uuid=uuid)
+    data = await r.lpop(key)
+    if data:
+        return json.loads(data)
+    return None
+
+async def _push_command_result(uuid: str, data: dict):
+    r = await get_redis()
+    key = REDIS_PENDING_RESULT_KEY.format(uuid=uuid)
+    await r.rpush(key, json.dumps(data))
+    await r.expire(key, REDIS_PENDING_TTL)
 
 
 @router.post("/register", response_model=AgentRegisterOut)
@@ -442,9 +469,6 @@ async def start_rdp(
 
 # ==================== SESSION SWITCH (pending commands for SYSTEM process) ====================
 
-_pending_commands: dict[str, list[dict]] = {}
-_pending_results: dict[str, list[dict]] = {}
-
 
 @router.post("/{agent_id}/login-session")
 async def login_session(
@@ -462,8 +486,7 @@ async def login_session(
         "username": data.username,
         "password": data.password,
     }
-    lst = _pending_commands.setdefault(agent.uuid, [])
-    lst.append(command)
+    await _push_pending_command(agent.uuid, command)
     logger.info(f"[login-session] Queued for agent {agent.uuid}: {data.username}")
 
     return {"status": "ok", "message": f"Login command queued for {data.username}"}
@@ -485,8 +508,7 @@ async def login_session_fast(
         "username": data.username,
         "password": data.password,
     }
-    lst = _pending_commands.setdefault(agent.uuid, [])
-    lst.append(command)
+    await _push_pending_command(agent.uuid, command)
     logger.info(f"[login-session-fast] Queued for agent {agent.uuid}: {data.username}")
 
     return {"status": "ok", "message": f"Fast login command queued for {data.username}"}
@@ -499,11 +521,9 @@ async def pending_command(
     _=Depends(get_agent_by_token),
 ):
     """Polled by agent (SYSTEM process) every 2s for pending commands"""
-    lst = _pending_commands.get(uuid, [])
-    if not lst:
+    cmd = await _pop_pending_command(uuid)
+    if cmd is None:
         return {"type": None}
-    cmd = lst.pop(0)
-    # Return flat JSON so C++ can parse it with simple string search
     return cmd
 
 
@@ -515,7 +535,6 @@ async def command_result(
     _=Depends(get_agent_by_token),
 ):
     """Agent reports result of executing a pending command"""
-    lst = _pending_results.setdefault(uuid, [])
-    lst.append(data.model_dump())
+    await _push_command_result(uuid, data.model_dump())
     logger.info(f"[command-result] agent={uuid} type={data.command_type} success={data.success} msg={data.message}")
     return {"status": "ok"}

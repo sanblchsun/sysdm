@@ -2,6 +2,7 @@
 # Stream relay: MJPEG + H.264, управление мышью через WebSocket
 import asyncio
 import concurrent.futures
+import os
 import socket
 import time
 import json
@@ -23,6 +24,100 @@ _mjpeg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
 REDIS_AGENT_KEY = "agent:config:{aid}"
 REDIS_AGENT_TTL = 86400
+REDIS_HELLO_KEY = "agent:hello:{aid}"
+REDIS_WORKER_KEY = "agent:worker:{aid}"
+
+WORKER_ID = os.environ.get("HOSTNAME", f"worker-{os.getpid()}")
+
+
+class PubSubManager:
+    """Redis Pub/Sub — кросс-воркер обмен для ControlHub и видео.
+    Каждый worker подписывается на ctrl:* и video:* при старте.
+    """
+
+    def __init__(self):
+        self._pubsub = None
+        self._task = None
+        self._pubsub_conn = None
+
+    async def start(self):
+        from app.redis_client import get_redis
+        r = await get_redis()
+        self._pubsub_conn = r
+        self._pubsub = r.pubsub()
+        await self._pubsub.psubscribe("ctrl:*", "video:*")
+        self._task = asyncio.create_task(self._run())
+        logger.info(f"[pubsub] worker={WORKER_ID} subscribed to ctrl:* video:*")
+
+    async def _run(self):
+        while True:
+            try:
+                async for msg in self._pubsub.listen():
+                    if msg["type"] != "pmessage":
+                        continue
+                    await self._dispatch(msg)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[pubsub] listener error: {e}")
+                await asyncio.sleep(1)
+
+    async def _dispatch(self, msg):
+        channel = msg["channel"]
+        data = msg["data"]
+        if isinstance(channel, bytes):
+            channel = channel.decode()
+
+        if channel.startswith("ctrl:to:"):
+            aid = channel[8:]
+            ws = HUB.agent_ws.get(aid)
+            if ws:
+                try:
+                    text = data.decode() if isinstance(data, bytes) else data
+                    await ws.send_text(text)
+                except Exception:
+                    pass
+
+        elif channel.startswith("ctrl:from:"):
+            aid = channel[10:]
+            viewers = HUB.viewer_ws.get(aid, set())
+            for vws in list(viewers):
+                try:
+                    text = data.decode() if isinstance(data, bytes) else data
+                    await vws.send_text(text)
+                except Exception:
+                    pass
+
+        elif channel.startswith("video:mjpeg:"):
+            aid = channel[12:]
+            a = AGENTS.get(aid)
+            if a:
+                frame = data if isinstance(data, bytes) else data.encode()
+                a.push_mjpeg(frame)
+
+        elif channel.startswith("video:h264:"):
+            aid = channel[11:]
+            a = AGENTS.get(aid)
+            if a:
+                chunk = data if isinstance(data, bytes) else data.encode()
+                a.push_h264(chunk)
+
+    async def publish(self, channel: str, message):
+        if self._pubsub_conn:
+            try:
+                await self._pubsub_conn.publish(channel, message)
+            except Exception as e:
+                logger.warning(f"[pubsub] publish {channel}: {e}")
+
+    async def stop(self):
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        if self._pubsub:
+            await self._pubsub.close()
 
 
 # ============ MODELS ============
@@ -51,6 +146,7 @@ class AgentState:
         "updated",
         "started",
         "_last_redis_sync",
+        "_worker_id",
     )
 
     def __init__(self, aid: str):
@@ -76,6 +172,7 @@ class AgentState:
         self.updated: float = 0.0
         self.started: float = time.time()
         self._last_redis_sync: float = 0.0
+        self._worker_id: str = WORKER_ID
 
     async def load_from_redis(self):
         r = await get_redis()
@@ -170,6 +267,7 @@ class ControlHub:
 AGENTS: Dict[str, AgentState] = {}
 LOCK = asyncio.Lock()
 HUB = ControlHub()
+PS_MANAGER = PubSubManager()
 
 
 async def _cleanup_dead_agents():
@@ -195,6 +293,7 @@ async def _cleanup_dead_agents():
                 if a:
                     a.h264_subscribers.clear()
             await r.delete(key)
+            await r.delete(REDIS_WORKER_KEY.format(aid=aid))
 
 
 # ============ HELPERS ============
@@ -266,16 +365,30 @@ async def get_agent(aid: str) -> AgentState:
 
 async def send_command_to_agent(agent_id: str, command: dict) -> bool:
     agent_ws = HUB.agent_ws.get(agent_id)
-    if agent_ws is None:
-        logger.warning(f"[relay] Agent {agent_id} not connected")
-        return False
+    if agent_ws is not None:
+        try:
+            msg = json.dumps(command)
+            await agent_ws.send_text(msg)
+            logger.info(f"[relay] Command sent locally to agent {agent_id}")
+            return True
+        except Exception as e:
+            logger.error(f"[relay] Failed to send command to agent {agent_id}: {e}")
+            return False
+    try:
+        r = await get_redis()
+        worker = await r.get(REDIS_WORKER_KEY.format(aid=agent_id))
+        if not worker:
+            logger.warning(f"[relay] Agent {agent_id} not connected to any worker")
+            return False
+    except Exception:
+        pass
     try:
         msg = json.dumps(command)
-        await agent_ws.send_text(msg)
-        logger.info(f"[relay] Command sent to agent {agent_id}: {msg}")
+        await PS_MANAGER.publish(f"ctrl:to:{agent_id}", msg)
+        logger.info(f"[relay] Command published to Redis for agent {agent_id}")
         return True
     except Exception as e:
-        logger.error(f"[relay] Failed to send command to agent {agent_id}: {e}")
+        logger.error(f"[relay] Failed to publish command for agent {agent_id}: {e}")
         return False
 
 
@@ -332,7 +445,12 @@ async def ws_control_agent(ws: WebSocket, aid: str):
         except Exception:
             pass
     HUB.agent_ws[aid] = ws
-    logger.info(f"[relay] agent connected: {aid}")
+    try:
+        r = await get_redis()
+        await r.set(REDIS_WORKER_KEY.format(aid=aid), WORKER_ID, ex=60)
+    except Exception:
+        pass
+    logger.info(f"[relay] agent connected: {aid} worker={WORKER_ID}")
     try:
         while True:
             msg = await ws.receive_text()
@@ -342,17 +460,14 @@ async def ws_control_agent(ws: WebSocket, aid: str):
                 continue
             if obj.get("type") == "hello":
                 HUB.agent_hello[aid] = msg
-                for vws in list(HUB.viewer_ws.get(aid, ())):
-                    try:
-                        await vws.send_text(msg)
-                    except Exception:
-                        pass
+                try:
+                    r = await get_redis()
+                    await r.set(REDIS_HELLO_KEY.format(aid=aid), msg, ex=300)
+                except Exception:
+                    pass
+                await PS_MANAGER.publish(f"ctrl:from:{aid}", msg)
             elif obj.get("type") == "clipboard":
-                for vws in list(HUB.viewer_ws.get(aid, ())):
-                    try:
-                        await vws.send_text(msg)
-                    except Exception:
-                        pass
+                await PS_MANAGER.publish(f"ctrl:from:{aid}", msg)
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -361,7 +476,12 @@ async def ws_control_agent(ws: WebSocket, aid: str):
         if HUB.agent_ws.get(aid) is ws:
             HUB.agent_ws.pop(aid, None)
             HUB.agent_hello.pop(aid, None)
-        logger.info(f"[relay] agent disconnected: {aid}")
+            try:
+                r = await get_redis()
+                await r.delete(REDIS_WORKER_KEY.format(aid=aid))
+            except Exception:
+                pass
+        logger.info(f"[relay] agent disconnected: {aid} worker={WORKER_ID}")
 
 
 @router.websocket("/ws/control/viewer/{aid}")
@@ -378,6 +498,12 @@ async def ws_control_viewer(ws: WebSocket, aid: str):
         return
     HUB.viewer_ws.setdefault(aid, set()).add(ws)
     hello = HUB.agent_hello.get(aid)
+    if not hello:
+        try:
+            r = await get_redis()
+            hello = await r.get(REDIS_HELLO_KEY.format(aid=aid))
+        except Exception:
+            pass
     if hello:
         try:
             await ws.send_text(hello)
@@ -386,12 +512,7 @@ async def ws_control_viewer(ws: WebSocket, aid: str):
     try:
         while True:
             msg = await ws.receive_text()
-            agent = HUB.agent_ws.get(aid)
-            if agent is not None:
-                try:
-                    await agent.send_text(msg)
-                except Exception:
-                    pass
+            await PS_MANAGER.publish(f"ctrl:to:{aid}", msg)
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -618,6 +739,15 @@ async def list_agents() -> AgentsListResponse:
 
         alive = a.updated > 0 and (now - a.updated) < 30.0
         elapsed = now - a.updated if a.updated > 0 else 999.0
+        ctrl_local = aid in HUB.agent_ws
+        ctrl_any = ctrl_local
+        if not ctrl_any:
+            try:
+                r = await get_redis()
+                worker_val = await r.get(REDIS_WORKER_KEY.format(aid=aid))
+                ctrl_any = worker_val is not None
+            except Exception:
+                pass
         out.append(
             AgentStatusResponse(
                 id=aid,
@@ -627,7 +757,7 @@ async def list_agents() -> AgentsListResponse:
                 mjpeg_frames=a.mjpeg_queue.qsize(),
                 h264_keyframes=a.h264_count,
                 h264_viewers=len(a.h264_subscribers),
-                ctrl_connected=aid in HUB.agent_ws,
+                ctrl_connected=ctrl_any,
                 target={
                     "codec": a.codec_target,
                     "encoder": a.encoder_target,

@@ -16,17 +16,42 @@
 - `redis_client.py` — race condition в `get_redis()`: добавлен `asyncio.Lock`
 - `relay.py` — утечка памяти в `list_agents()`: `load_from_redis()` теперь загружает `updated` из Redis
 
-## Multi-worker (2026-05-12)
+## Multi-worker: п. 3.2.4 (2026-05-12)
 
-### relay.py
-- `AgentState.persist_runtime()` — синхронизация `codec_current`, `updated` и runtime-полей в Redis
-- `load_from_redis()` — загрузка `updated`, `codec_current`, `encoder_current`, `bitrate_current`, `fps_current` из Redis
-- `ingest()` — heartbeat в Redis каждые 15 сек + `persist_runtime()` при старте
-- `list_agents()` — alive-детекция через `updated` из Redis (окно 30 сек)
+### relay.py — ControlHub через Redis Pub/Sub
+
+- Добавлен `PubSubManager` — подписка на `ctrl:*` и `video:*` при старте каждого worker
+- `ws_control_agent`: публикует `hello`/`clipboard` в `ctrl:from:{aid}`, сохраняет hello в Redis
+- `ws_control_viewer`: публикует mouse/keyboard в `ctrl:to:{aid}`, получает hello из Redis если нет локально
+- `send_command_to_agent`: сначала локальный agent_ws, затем Redis Pub/Sub `ctrl:to:{aid}` как fallback
+- `_dispatch()`: получает Pub/Sub сообщения и направляет в локальные WebSocket'ы
+- `REDIS_WORKER_KEY` — отслеживание на каком worker'е находится WebSocket агента
+- `list_agents`: `ctrl_connected` теперь проверяет Redis (кросс-воркер)
+
+### agent.py — Pending Commands в Redis Lists
+
+- `_pending_commands`/`_pending_results` → Redis Lists `pending_cmd:{uuid}` / `pending_result:{uuid}`
+- TTL 5 минут на каждую команду
+- Функции: `_push_pending_command`, `_pop_pending_command`, `_push_command_result`
+
+### main.py — Жизненный цикл PubSubManager
+
+- `startup`: `PS_MANAGER.start()` — запуск фонового listener Pub/Sub
+- `shutdown`: `PS_MANAGER.stop()` — остановка listener
 
 ### nginx/default.conf
-- Upstream `sysdm_cluster` с `hash $uri consistent` (закомментирован multi-server вариант)
-- Все `proxy_pass` направлены через upstream
+
+- `map $uri $route_key` — извлечение ID агента из URI для consistent hash
+- upstream `sysdm_cluster` использует `hash $route_key consistent`
+- `resolver 127.0.0.11` для Docker DNS (поддержка нескольких контейнеров)
+- Закомментированный multi-server вариант заменён на `hash $route_key` с одним сервером `app:8000 resolve`
+
+### Dockerfile.prod
+
+- `uvicorn --workers 4` — 4 процесса внутри одного контейнера
 
 ### docker-compose.prod.yml
-- Добавлен комментарий о масштабировании: `docker compose up --scale app=4`
+
+- Добавлен сервис `redis:7-alpine` (отсутствовал в prod-конфиге)
+- `depends_on: redis` для app
+- Обновлён комментарий о масштабировании

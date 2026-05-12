@@ -15,7 +15,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db:/docker-entrypoint-initdb.d
+      # - ./init-db:/docker-entrypoint-initdb.d
     env_file:
       - .env
     networks:
@@ -32,8 +32,10 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     container_name: sysdm_api
-    # Для multi-worker: docker compose up --scale app=4
-    # И раскомментировать upstream sysdm_cluster в nginx/default.conf
+    # uvicorn --workers 4 запускает 4 процесса внутри контейнера
+    # Для масштабирования на несколько контейнеров:
+    #   docker compose up --scale app=2
+    # И добавить несколько server app:8000 resolve; в upstream sysdm_cluster
     ports:
       - "${APP_PORT}:${APP_PORT}"
     environment:
@@ -48,6 +50,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       # Монтируем исходный код для разработки
       - .:/app
@@ -56,11 +60,19 @@ services:
     networks:
       - sysdm_network
     restart: unless-stopped
-    #    restart: always
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.sysdm.rule=Host(`sysdm.local`)"
       - "traefik.http.services.sysdm.loadbalancer.server.port=8000"
+
+  redis:
+    image: redis:7-alpine
+    container_name: sysdm-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - sysdm_network
+    restart: unless-stopped
 
   nginx:
     image: nginx:stable-alpine
@@ -72,21 +84,23 @@ services:
       - "443:443"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./certbot/conf:/etc/letsencrypt:ro
-      - ./certbot/www:/var/www/certbot:ro
+      # - ./certbot/conf:/etc/letsencrypt:ro
+      # - ./certbot/www:/var/www/certbot:ro
+      # заменил на 
+      - ./letsencrypt/live/dev.local:/etc/letsencrypt/live/dev.local:ro
       - ./app/static:/app/static:ro
     networks:
       - sysdm_network
     restart: unless-stopped
 
-  certbot:
-    image: certbot/certbot
-    container_name: certbot
-    volumes:
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
-    networks:
-      - sysdm_network
+  # certbot:
+  #   image: certbot/certbot
+  #   container_name: certbot
+  #   volumes:
+  #     - ./certbot/conf:/etc/letsencrypt
+  #     - ./certbot/www:/var/www/certbot
+  #   networks:
+  #     - sysdm_network
 
 networks:
   sysdm_network:

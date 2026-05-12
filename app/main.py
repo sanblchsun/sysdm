@@ -46,9 +46,11 @@ async def compat_relay_middleware(request: Request, call_next):
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(relay._cleanup_dead_agents())
+    await relay.PS_MANAGER.start()
 
 @app.on_event("shutdown")
 async def shutdown():
+    await relay.PS_MANAGER.stop()
     from app.redis_client import close_redis
     await close_redis()
 
