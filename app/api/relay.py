@@ -192,7 +192,7 @@ def _parse_mjpeg_frames(chunk: bytes, buf: bytearray, offset: int) -> tuple[list
         offset = eoi + 2
         frames.append(frame)
         if offset > len(buf) // 2:
-            buf = buf[offset:]
+            del buf[:offset]
             offset = 0
     return frames, buf, offset
 
