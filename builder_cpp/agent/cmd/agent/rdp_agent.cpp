@@ -1881,13 +1881,23 @@ int run_rdp_worker(const std::string &host, int port,
                    const std::string &agent_id, bool verify_cert,
                    int timeout_min, const std::string &shm_name)
 {
-    // Путь к ffmpeg рядом с собственным exe.
+    // Путь к ffmpeg: 1) рядом с exe, 2) через PATH
     char path[MAX_PATH] = {0};
     GetModuleFileNameA(NULL, path, MAX_PATH);
     std::string exe_path = path;
     size_t slash = exe_path.find_last_of("\\/");
     std::string exe_dir = (slash != std::string::npos) ? exe_path.substr(0, slash) : ".";
     std::string ffmpeg = exe_dir + "\\ffmpeg.exe";
+
+    if (GetFileAttributesA(ffmpeg.c_str()) == INVALID_FILE_ATTRIBUTES)
+    {
+        ffmpeg = "ffmpeg.exe";
+        log("[rdp_worker] ffmpeg.exe not in agent dir, will search PATH");
+    }
+    else
+    {
+        log("[rdp_worker] found ffmpeg.exe in agent dir: " + ffmpeg);
+    }
 
     RDPConfig cfg;
     cfg.server_host = host;

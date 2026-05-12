@@ -357,7 +357,9 @@
         const ctx = canvas.getContext("2d");
         let decoder = null;
         let initInFlight = false;
-        let buf = new Uint8Array(0);
+        const H264_BUF_SIZE = 2 * 1024 * 1024;
+        let buf = new Uint8Array(H264_BUF_SIZE);
+        let offset = 0;
         let waitingKey = true;
         let frames = 0,
           bytes = 0,
@@ -373,10 +375,14 @@
           const add = new Uint8Array(ev.data);
           bytes += add.length;
           if (add.length === 0) return;
-          const merged = new Uint8Array(buf.length + add.length);
-          merged.set(buf, 0);
-          merged.set(add, buf.length);
-          buf = merged;
+          if (offset + add.length > buf.length) {
+            const newSize = Math.max(buf.length * 2, offset + add.length);
+            const newBuf = new Uint8Array(newSize);
+            newBuf.set(buf.subarray(0, offset), 0);
+            buf = newBuf;
+          }
+          buf.set(add, offset);
+          offset += add.length;
           drainAUs();
         };
 
@@ -402,12 +408,13 @@
           return out;
         }
         function drainAUs() {
-          const codes = findStartCodes(buf);
+          const view = new Uint8Array(buf.buffer, 0, offset);
+          const codes = findStartCodes(view);
           if (codes.length < 2) return;
           const starts = [];
           for (let k = 0; k < codes.length; k++) {
             const c = codes[k];
-            const t = nalType(buf[c.pos + c.len]);
+            const t = nalType(view[c.pos + c.len]);
             if (t === 9) starts.push(c.pos);
             else if (t === 7 && starts.length === 0) starts.push(c.pos);
           }
@@ -416,7 +423,11 @@
             const au = buf.subarray(starts[i], starts[i + 1]);
             handleAU(au);
           }
-          buf = buf.slice(starts[starts.length - 1]);
+          const remaining = offset - starts[starts.length - 1];
+          if (remaining > 0 && remaining < offset) {
+            buf.copyWithin(0, starts[starts.length - 1], offset);
+          }
+          offset = remaining;
         }
         function findNALU(au, type) {
           const cs = findStartCodes(au);

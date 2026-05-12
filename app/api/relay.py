@@ -1,6 +1,8 @@
 # app/api/relay.py
 # Stream relay: MJPEG + H.264, управление мышью через WebSocket
 import asyncio
+import concurrent.futures
+import socket
 import time
 import json
 from typing import Dict, Optional, Set
@@ -16,6 +18,7 @@ from app.models import User
 from app.schemas.relay import RelayConfigBody, AgentsListResponse, AgentStatusResponse
 
 router = APIRouter(prefix="/relay", tags=["relay"])
+_mjpeg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 
 # ============ MODELS ============
@@ -33,9 +36,7 @@ class AgentState:
         "encoder_current",
         "bitrate_current",
         "fps_current",
-        "mjpeg_latest",
-        "mjpeg_count",
-        "_mjpeg_event",
+        "mjpeg_queue",
         "h264_keyframe_buffer",
         "h264_subscribers",
         "h264_count",
@@ -56,9 +57,7 @@ class AgentState:
         self.bitrate_current: Optional[str] = None
         self.fps_current: Optional[int] = None
 
-        self.mjpeg_latest: Optional[bytes] = None
-        self.mjpeg_count: int = 0
-        self._mjpeg_event = asyncio.Event()
+        self.mjpeg_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
 
         self.h264_keyframe_buffer = bytearray()
         self.h264_subscribers: Set[asyncio.Queue] = set()
@@ -68,19 +67,22 @@ class AgentState:
         self.started: float = time.time()
 
     def push_mjpeg(self, frame: bytes):
-        self.mjpeg_latest = frame
-        self.mjpeg_count += 1
         self.updated = time.time()
-        ev = self._mjpeg_event
-        self._mjpeg_event = asyncio.Event()
-        ev.set()
-
-    async def wait_mjpeg(self, timeout: float = 5.0) -> bool:
+        if self.mjpeg_queue.full():
+            try:
+                self.mjpeg_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
         try:
-            await asyncio.wait_for(self._mjpeg_event.wait(), timeout=timeout)
-            return True
+            self.mjpeg_queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            pass
+
+    async def wait_mjpeg(self, timeout: float = 5.0) -> Optional[bytes]:
+        try:
+            return await asyncio.wait_for(self.mjpeg_queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
-            return False
+            return None
 
     def push_h264(self, chunk: bytes):
         idr_off = find_idr_offset(chunk)
@@ -118,7 +120,54 @@ LOCK = asyncio.Lock()
 HUB = ControlHub()
 
 
+async def _cleanup_dead_agents():
+    """Background task: periodically remove stale agents from AGENTS dict."""
+    while True:
+        await asyncio.sleep(30)
+        now = time.time()
+        dead = [
+            aid
+            for aid, a in list(AGENTS.items())
+            if a.updated > 0 and now - a.updated > 60
+        ]
+        for aid in dead:
+            logger.info(f"[cleanup] removing dead agent: {aid}")
+            async with LOCK:
+                a = AGENTS.pop(aid, None)
+                if a:
+                    a.h264_subscribers.clear()
+
+
 # ============ HELPERS ============
+def _parse_mjpeg_frames(chunk: bytes, buf: bytearray, offset: int) -> tuple[list[bytes], bytearray, int]:
+    """Parse MJPEG frames from chunk. Runs in thread pool to avoid blocking event loop."""
+    buf.extend(chunk)
+    frames = []
+    while True:
+        soi = buf.find(MJPEG_SOI, offset)
+        if soi < 0:
+            offset = len(buf)
+            if offset > MAX_MJPEG:
+                buf.clear()
+                offset = 0
+            break
+        if soi > offset:
+            offset = soi
+        eoi = buf.find(MJPEG_EOI, offset + 2)
+        if eoi < 0:
+            if len(buf) > MAX_MJPEG:
+                buf.clear()
+                offset = 0
+            break
+        frame = bytes(buf[offset : eoi + 2])
+        offset = eoi + 2
+        frames.append(frame)
+        if offset > len(buf) // 2:
+            buf = buf[offset:]
+            offset = 0
+    return frames, buf, offset
+
+
 def find_idr_offset(buf: bytes) -> int:
     """Найти смещение первого H.264 start code с SPS (7) или IDR (5)"""
     i = 0
@@ -220,6 +269,12 @@ async def _ws_auth_ok(ws: WebSocket) -> bool:
 async def ws_control_agent(ws: WebSocket, aid: str):
     """WebSocket подключение агента для управления"""
     await ws.accept()
+    try:
+        sock = ws._transport.get_extra_info('socket')
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception:
+        pass
     old = HUB.agent_ws.get(aid)
     if old is not None:
         try:
@@ -263,6 +318,12 @@ async def ws_control_agent(ws: WebSocket, aid: str):
 async def ws_control_viewer(ws: WebSocket, aid: str):
     """WebSocket подключение вьюера для управления мышью/клавиатурой"""
     await ws.accept()
+    try:
+        sock = ws._transport.get_extra_info('socket')
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception:
+        pass
     if not await _ws_auth_ok(ws):
         await ws.close(code=4001)
         return
@@ -384,50 +445,22 @@ async def ingest(aid: str, request: Request):
         logger.info(f"[relay] mjpeg <- {request.client.host} id={aid}")
         logger.warning(f"[relay] BEFORE stream() - waiting for chunks...")
         buf = bytearray()
+        offset = 0
         frame_count = 0
         total_bytes = 0
+        loop = asyncio.get_running_loop()
         try:
             logger.warning(f"[relay] ENTERING stream() loop...")
             async for chunk in request.stream():
                 if not chunk:
                     continue
                 total_bytes += len(chunk)
-                # logger.debug(
-                #     f"[relay] mjpeg {aid}: received chunk size={len(chunk)}, total_bytes={total_bytes}"
-                # )
-                buf.extend(chunk)
-                # logger.debug(f"[relay] mjpeg {aid}: buf.size={len(buf)}")
-                while True:
-                    soi = buf.find(MJPEG_SOI)
-                    if soi < 0:
-                        # logger.debug(
-                        #     f"[relay] mjpeg {aid}: no SOI found in buf, buf size={len(buf)}"
-                        # )
-                        buf.clear()
-                        break
-                    if soi > 0:
-                        # logger.debug(
-                        #     f"[relay] mjpeg {aid}: SOI at offset {soi}, skipping {soi} bytes"
-                        # )
-                        del buf[:soi]
-                    eoi = buf.find(MJPEG_EOI, 2)
-                    if eoi < 0:
-                        # logger.debug(
-                        #     f"[relay] mjpeg {aid}: no EOI found after SOI, buf size={len(buf)}"
-                        # )
-                        if len(buf) > MAX_MJPEG:
-                            logger.warning(
-                                f"[relay] mjpeg {aid}: buf too large ({len(buf)}), clearing"
-                            )
-                            buf.clear()
-                        break
-                    frame = bytes(buf[: eoi + 2])
-                    del buf[: eoi + 2]
+                frames, buf, offset = await loop.run_in_executor(
+                    _mjpeg_executor, _parse_mjpeg_frames, chunk, buf, offset
+                )
+                for frame in frames:
                     a.push_mjpeg(frame)
                     frame_count += 1
-                    # logger.debug(
-                    #     f"[relay] mjpeg {aid}: decoded frame #{frame_count}, size={len(frame)}, updated={a.updated}"
-                    # )
                     if frame_count % 10 == 0:
                         logger.info(
                             f"[relay] mjpeg {aid}: {frame_count} frames decoded so far"
@@ -435,7 +468,7 @@ async def ingest(aid: str, request: Request):
         except Exception as e:
             logger.error(f"[relay] mjpeg {aid} err: {e}", exc_info=True)
         logger.info(
-            f"[relay] mjpeg {aid} stream finished: {frame_count} frames decoded from {total_bytes} bytes, total mjpeg_count={a.mjpeg_count}, updated={a.updated}"
+            f"[relay] mjpeg {aid} stream finished: {frame_count} frames decoded from {total_bytes} bytes, updated={a.updated}"
         )
         return {"status": "ok", "mode": "mjpeg"}
 
@@ -450,23 +483,18 @@ async def stream_mjpeg(aid: str, _=Depends(require_viewer_auth)):
     a = await get_agent(aid)
 
     async def gen():
-        last = -1
-        if a.mjpeg_latest is None:
-            await a.wait_mjpeg(timeout=10.0)
         while True:
-            if a.mjpeg_count != last and a.mjpeg_latest is not None:
-                last = a.mjpeg_count
-                f = a.mjpeg_latest
-                yield (
-                    b"--" + BOUNDARY.encode() + b"\r\nContent-Type: image/jpeg\r\n"
-                    b"Content-Length: "
-                    + str(len(f)).encode()
-                    + b"\r\n\r\n"
-                    + f
-                    + b"\r\n"
-                )
-            else:
-                await a.wait_mjpeg(timeout=5.0)
+            f = await a.wait_mjpeg(timeout=5.0)
+            if f is None:
+                continue
+            yield (
+                b"--" + BOUNDARY.encode() + b"\r\nContent-Type: image/jpeg\r\n"
+                b"Content-Length: "
+                + str(len(f)).encode()
+                + b"\r\n\r\n"
+                + f
+                + b"\r\n"
+            )
 
     return StreamingResponse(
         gen(),
@@ -516,7 +544,7 @@ async def list_agents() -> AgentsListResponse:
         age = now - a.updated if a.updated > 0 else -1
         # logger.debug(
         #     f"[relay] agent {aid}: alive={alive}, updated={a.updated}, age={age:.1f}s, "
-        #     f"mjpeg_count={a.mjpeg_count}, codec_current={a.codec_current}, "
+        #     f"mjpeg_count={a.mjpeg_queue.qsize()}, codec_current={a.codec_current}, "
         #     f"ctrl_connected={aid in HUB.agent_ws}"
         # )
         out.append(
@@ -524,7 +552,7 @@ async def list_agents() -> AgentsListResponse:
                 id=aid,
                 alive=alive,
                 uptime_s=round(now - a.started, 1),
-                mjpeg_frames=a.mjpeg_count,
+                mjpeg_frames=a.mjpeg_queue.qsize(),
                 h264_keyframes=a.h264_count,
                 h264_viewers=len(a.h264_subscribers),
                 ctrl_connected=aid in HUB.agent_ws,
@@ -554,182 +582,6 @@ async def healthz():
     return {"ok": True, "agents": len(AGENTS)}
 
 
-# ============ BACKWARD COMPATIBILITY ROUTES (без /relay/ префикса) ============
-# Для агента, который ещё не переведён на новые пути с /relay/ префиксом
-# Все эти маршруты прокидывают запросы к основным эндпойнтам relay
-
-compat_router = APIRouter(tags=["relay-compat"])
-
-
-@compat_router.get("/agents/{aid}/config", response_class=PlainTextResponse)
-async def compat_get_config(aid: str):
-    """[COMPAT] Получить конфигурацию агента (прокси к /relay/agents/{aid}/config)"""
-    a = await get_agent(aid)
-    return (
-        f"codec={a.codec_target}\n"
-        f"encoder={a.encoder_target}\n"
-        f"bitrate={a.bitrate_target}\n"
-        f"fps={a.fps_target}\n"
-        f"mjpeg_q={a.mjpeg_q_target}\n"
-        f"rdp_timeout={a.rdp_timeout_target}\n"
-    )
-
-
-@compat_router.post("/agents/{aid}/config")
-async def compat_set_config(aid: str, body: RelayConfigBody):
-    """[COMPAT] Обновить конфигурацию агента (прокси к /relay/agents/{aid}/config)"""
-    a = await get_agent(aid)
-    if body.codec is not None:
-        a.codec_target = body.codec
-    if body.encoder is not None:
-        a.encoder_target = body.encoder
-    if body.bitrate is not None:
-        a.bitrate_target = body.bitrate
-    if body.fps is not None:
-        a.fps_target = body.fps
-    if body.mjpeg_q is not None:
-        a.mjpeg_q_target = body.mjpeg_q
-    if body.rdp_timeout is not None:
-        a.rdp_timeout_target = body.rdp_timeout
-    return {
-        "status": "ok",
-        "target": {
-            "codec": a.codec_target,
-            "encoder": a.encoder_target,
-            "bitrate": a.bitrate_target,
-            "fps": a.fps_target,
-            "mjpeg_q": a.mjpeg_q_target,
-            "rdp_timeout": a.rdp_timeout_target,
-        },
-    }
-
-
-@compat_router.post("/ingest/{aid}")
-async def compat_ingest(aid: str, request: Request):
-    """[COMPAT] Получить видеопоток от агента (прокси к /relay/ingest/{aid})"""
-    a = await get_agent(aid)
-    ctype = request.headers.get("content-type", "").lower()
-    a.encoder_current = request.headers.get("x-agent-encoder")
-    a.bitrate_current = request.headers.get("x-agent-bitrate")
-    try:
-        a.fps_current = int(request.headers.get("x-agent-fps", "0")) or None
-    except:
-        a.fps_current = None
-
-    if "h264" in ctype:
-        a.codec_current = "h264"
-        logger.info(
-            f"[relay-compat] h264/{a.encoder_current} <- {request.client.host} id={aid}"
-        )
-        try:
-            async for chunk in request.stream():
-                if chunk:
-                    a.push_h264(chunk)
-        except Exception as e:
-            logger.error(f"[relay-compat] h264 {aid} err: {e}")
-        return {"status": "ok", "mode": "h264"}
-    else:
-        a.codec_current = "mjpeg"
-        logger.info(f"[relay-compat] mjpeg <- {request.client.host} id={aid}")
-        buf = bytearray()
-        try:
-            async for chunk in request.stream():
-                if not chunk:
-                    continue
-                buf.extend(chunk)
-                while True:
-                    soi = buf.find(MJPEG_SOI)
-                    if soi < 0:
-                        buf.clear()
-                        break
-                    if soi > 0:
-                        del buf[:soi]
-                    eoi = buf.find(MJPEG_EOI, 2)
-                    if eoi < 0:
-                        if len(buf) > MAX_MJPEG:
-                            buf.clear()
-                        break
-                    frame = bytes(buf[: eoi + 2])
-                    del buf[: eoi + 2]
-                    a.push_mjpeg(frame)
-        except Exception as e:
-            logger.error(f"[relay-compat] mjpeg {aid} err: {e}")
-        return {"status": "ok", "mode": "mjpeg"}
-
-
-@compat_router.get("/agents")
-async def compat_list_agents() -> AgentsListResponse:
-    """[COMPAT] Список всех активных агентов (прокси к /relay/agents)"""
-    now = time.time()
-    out = []
-    for aid, a in AGENTS.items():
-        alive = a.updated > 0 and (now - a.updated) < 5.0
-        out.append(
-            AgentStatusResponse(
-                id=aid,
-                alive=alive,
-                uptime_s=round(now - a.started, 1),
-                mjpeg_frames=a.mjpeg_count,
-                h264_keyframes=a.h264_count,
-                h264_viewers=len(a.h264_subscribers),
-                ctrl_connected=aid in HUB.agent_ws,
-                target={
-                    "codec": a.codec_target,
-                    "encoder": a.encoder_target,
-                    "bitrate": a.bitrate_target,
-                    "fps": a.fps_target,
-                    "mjpeg_q": a.mjpeg_q_target,
-                    "rdp_timeout": a.rdp_timeout_target,
-                },
-                current={
-                    "codec": a.codec_current,
-                    "encoder": a.encoder_current,
-                    "bitrate": a.bitrate_current,
-                    "fps": a.fps_current,
-                },
-            )
-        )
-    return AgentsListResponse(agents=out)
-
-
-@compat_router.websocket("/ws/control/agent/{aid}")
-async def compat_ws_control_agent(ws: WebSocket, aid: str):
-    """[COMPAT] WebSocket подключение агента для управления (прокси к /relay/ws/control/agent/{aid})"""
-    await ws.accept()
-    old = HUB.agent_ws.get(aid)
-    if old is not None:
-        try:
-            await old.close()
-        except Exception:
-            pass
-    HUB.agent_ws[aid] = ws
-    logger.info(f"[relay-compat] agent connected: {aid}")
-    try:
-        while True:
-            msg = await ws.receive_text()
-            try:
-                obj = json.loads(msg)
-            except Exception:
-                continue
-            if obj.get("type") == "hello":
-                HUB.agent_hello[aid] = msg
-                for vws in list(HUB.viewer_ws.get(aid, ())):
-                    try:
-                        await vws.send_text(msg)
-                    except Exception:
-                        pass
-            elif obj.get("type") == "clipboard":
-                for vws in list(HUB.viewer_ws.get(aid, ())):
-                    try:
-                        await vws.send_text(msg)
-                    except Exception:
-                        pass
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        logger.error(f"[relay-compat] agent {aid}: {e}")
-    finally:
-        if HUB.agent_ws.get(aid) is ws:
-            HUB.agent_ws.pop(aid, None)
-            HUB.agent_hello.pop(aid, None)
-        logger.info(f"[relay-compat] agent disconnected: {aid}")
+# compat_router удалён. Все старые пути без /relay/ префикса
+# обрабатываются middleware в main.py (compat_relay_middleware),
+# который переписывает path на /relay/... не трогая точный /agents.

@@ -1,4 +1,5 @@
 # Python
+.opencode/
 sysdm_setup.exe
 build/
 dist/agents/
