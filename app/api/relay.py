@@ -350,6 +350,28 @@ async def set_config(aid: str, body: RelayConfigBody):
     }
 
 
+@router.post("/internal/ingest-status/{aid}")
+async def ingest_status(aid: str, request: Request):
+    """Вызывается Go relay при старте H.264 инджеста и периодически (heartbeat)"""
+    a = await get_agent(aid)
+    a.codec_current = "h264"
+    a.updated = time.time()
+    enc = request.headers.get("x-agent-encoder")
+    if enc:
+        a.encoder_current = enc
+    bit = request.headers.get("x-agent-bitrate")
+    if bit:
+        a.bitrate_current = bit
+    try:
+        fps = request.headers.get("x-agent-fps", "")
+        if fps:
+            a.fps_current = int(fps) or None
+    except:
+        pass
+    logger.info(f"[relay] h264 ingest notification: id={aid}, encoder={a.encoder_current}")
+    return {"status": "ok"}
+
+
 # ============ INGEST ============
 MJPEG_SOI = b"\xff\xd8"
 MJPEG_EOI = b"\xff\xd9"

@@ -38,6 +38,13 @@ services:
       - ./app/static:/app/static:ro
     restart: unless-stopped
 
+  media-relay:
+    build:
+      context: ./media_relay
+    container_name: media-relay
+    network_mode: host
+    restart: unless-stopped
+
 
 networks:
   sysdm_network:

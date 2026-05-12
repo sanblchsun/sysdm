@@ -533,12 +533,77 @@
         }
       }
 
+      // ========= WebRTC =========
+      let pc = null;
+
+      async function startWebRTC() {
+        if (typeof RTCPeerConnection === "undefined") {
+          throw new Error("WebRTC not supported");
+        }
+
+        const video = document.createElement("video");
+        video.id = "media";
+        video.autoplay = true;
+        video.muted = true;
+        video.playsInline = true;
+        box.innerHTML = "";
+        box.appendChild(video);
+
+        pc = new RTCPeerConnection({ iceServers: [] });
+        pc.ontrack = (event) => {
+          console.log("[webrtc] ontrack", event.track.kind, event.streams.length);
+          video.srcObject = event.streams[0];
+          video.play().catch(e => console.error("[video] play error", e));
+          video.onerror = (e) => console.error("[video] error", video.error);
+          video.onresize = () => console.log("[video] resize", video.videoWidth, "x", video.videoHeight);
+          setTimeout(() => console.log("[video] after 2s:", video.videoWidth, "x", video.videoHeight), 2000);
+        };
+        pc.onicecandidate = (e) => {
+          if (e.candidate) console.log("[ice]", e.candidate.type, e.candidate.candidate.split(" ")[7]);
+        };
+        pc.oniceconnectionstatechange = () => {
+          console.log("[ice] state:", pc.iceConnectionState);
+          if (pc.iceConnectionState === "disconnected" ||
+              pc.iceConnectionState === "failed") {
+            setTimeout(() => { if (mode === "webrtc") switchToFallback(); }, 3000);
+          }
+        };
+
+        const offer = await pc.createOffer({ offerToReceiveVideo: true });
+        await pc.setLocalDescription(offer);
+
+        const resp = await fetch(
+          `/relay/webrtc-offer/${encodeURIComponent(id)}`,
+          { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sdp: pc.localDescription.sdp }) }
+        );
+        if (!resp.ok) throw new Error(`offer status=${resp.status}`);
+
+        const data = await resp.json();
+        await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+
+        attachMouse(video, () => ({ w: video.videoWidth, h: video.videoHeight }));
+      }
+
+      function closeWebRTC() {
+        if (pc) { pc.close(); pc = null; }
+      }
+
+      async function switchToFallback() {
+        closeWebRTC();
+        box.innerHTML = `<canvas id="media"></canvas>`;
+        const cv = document.getElementById("media");
+        startH264(cv);
+        attachMouse(cv, () => ({ w: cv.width, h: cv.height }));
+      }
+
       // ========= start =========
       let mode = null;
       async function start() {
         const a = await getCurrent();
         const cur = a?.current?.codec || "mjpeg";
-        mode = cur === "h264" ? "h264" : "mjpeg";
+        mode = cur === "h264" ? "webrtc" : "mjpeg";
+
         if (mode === "mjpeg") {
           box.innerHTML = `<img id="media" src="/relay/stream/mjpeg/${encodeURIComponent(id)}?t=${Date.now()}">`;
           const img = document.getElementById("media");
@@ -548,17 +613,19 @@
           }));
           img.onload = () => {};
         } else {
-          box.innerHTML = `<canvas id="media"></canvas>`;
-          const cv = document.getElementById("media");
-          startH264(cv);
-          attachMouse(cv, () => ({ w: cv.width, h: cv.height }));
+          try {
+            await startWebRTC();
+          } catch (e) {
+            showErr("WebRTC: " + e.message + ", fallback to WS");
+            switchToFallback();
+          }
         }
       }
 
       setInterval(async () => {
         try {
           const a = await getCurrent();
-          const now = a?.current?.codec === "h264" ? "h264" : "mjpeg";
+          const now = a?.current?.codec === "h264" ? "webrtc" : "mjpeg";
           if (now !== mode) location.reload();
         } catch {}
       }, 3000);

@@ -86,6 +86,17 @@ services:
     networks:
       - sysdm_network
 
+  media-relay:
+    build:
+      context: ./media_relay
+    container_name: media-relay
+    ports:
+      - "8001:8001"
+      - "10000-20000:10000-20000/udp"
+    networks:
+      - sysdm_network
+    restart: unless-stopped
+
 networks:
   sysdm_network:
     driver: bridge
