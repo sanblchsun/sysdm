@@ -1185,8 +1185,9 @@ void RDPAgent::handle_control(const std::string &j)
             }
             else if (cmd == "start-rdp-worker")
             {
-                // Worker уже запущен — игнорируем повторную команду
-                log("handle_control: start-rdp-worker ignored, already running");
+                // Worker уже запущен — рестартуем ffmpeg сессию
+                log("handle_control: start-rdp-worker received, restarting session");
+                runtime.restart = true;
             }
             else if (cmd == "stop-rdp-worker")
             {
@@ -1359,7 +1360,7 @@ void RDPAgent::control_loop()
             std::this_thread::sleep_for(std::chrono::seconds(3));
             continue;
         }
-        std::string path = "/relay/ws/control/agent/" + config.agent_id;
+        std::string path = "/relay/ws/control/agent/" + config.agent_id + "?role=worker";
         if (!ws_handshake(c, config.server_host, config.server_port, path))
         {
             log("ctrl wss handshake failed");

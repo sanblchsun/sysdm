@@ -914,7 +914,7 @@ void controlCommandLoop()
             std::this_thread::sleep_for(std::chrono::seconds(3));
             continue;
         }
-        std::string ws_path = path_prefix + g_agent_uuid;
+        std::string ws_path = path_prefix + g_agent_uuid + "?role=main";
         if (!RDPAgent::ws_handshake(c, g_rdp_server_host, g_rdp_server_port, ws_path))
         {
             log("control WS handshake failed");

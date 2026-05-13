@@ -74,13 +74,22 @@ class PubSubManager:
 
         if channel.startswith("ctrl:to:"):
             aid = channel[8:]
-            ws = HUB.agent_ws.get(aid)
+            text = data.decode() if isinstance(data, bytes) else data
+            ws = HUB.agent_worker_ws.get(aid)
             if ws:
                 try:
-                    text = data.decode() if isinstance(data, bytes) else data
                     await ws.send_text(text)
                 except Exception:
                     pass
+            else:
+                ws = HUB.agent_ws.get(aid)
+                if ws:
+                    try:
+                        await ws.send_text(text)
+                    except Exception:
+                        pass
+                else:
+                    logger.warning(f"[pubsub] ctrl:to:{aid} - no WS found on worker={WORKER_ID}")
 
         elif channel.startswith("ctrl:from:"):
             aid = channel[10:]
@@ -95,16 +104,34 @@ class PubSubManager:
         elif channel.startswith("video:mjpeg:"):
             aid = channel[12:]
             a = AGENTS.get(aid)
-            if a:
-                frame = data if isinstance(data, bytes) else data.encode()
-                a.push_mjpeg(frame)
+            if a is None:
+                a = AgentState(aid)
+                AGENTS[aid] = a
+                logger.debug(f"[pubsub] video:mjpeg:{aid} - created new AgentState on worker={WORKER_ID}")
+            
+            # !!!!! CRITICAL FIX: MUST update a.updated for ALL video frames
+            # not just for newly created agents. This ensures that agents
+            # remain "alive" in multi-worker setups where video arrives via Redis.
+            a.updated = time.time()
+            frame = data if isinstance(data, bytes) else data.encode()
+            a.push_mjpeg(frame)
+            logger.debug(f"[pubsub] video:mjpeg:{aid} - updated timestamp on worker={WORKER_ID}, elapsed since last update: ~0ms")
 
         elif channel.startswith("video:h264:"):
             aid = channel[11:]
             a = AGENTS.get(aid)
-            if a:
-                chunk = data if isinstance(data, bytes) else data.encode()
-                a.push_h264(chunk)
+            if a is None:
+                a = AgentState(aid)
+                AGENTS[aid] = a
+                logger.debug(f"[pubsub] video:h264:{aid} - created new AgentState on worker={WORKER_ID}")
+            
+            # !!!!! CRITICAL FIX: MUST update a.updated for ALL video frames
+            # not just for newly created agents. This ensures that agents
+            # remain "alive" in multi-worker setups where video arrives via Redis.
+            a.updated = time.time()
+            chunk = data if isinstance(data, bytes) else data.encode()
+            a.push_h264(chunk)
+            logger.debug(f"[pubsub] video:h264:{aid} - updated timestamp on worker={WORKER_ID}, elapsed since last update: ~0ms")
 
     async def publish(self, channel: str, message):
         if self._pubsub_conn:
@@ -224,6 +251,7 @@ class AgentState:
             await r.expire(key, REDIS_AGENT_TTL)
 
     def push_mjpeg(self, frame: bytes):
+        old_updated = self.updated
         self.updated = time.time()
         if self.mjpeg_queue.full():
             try:
@@ -263,7 +291,8 @@ class AgentState:
 
 class ControlHub:
     def __init__(self):
-        self.agent_ws: Dict[str, WebSocket] = {}
+        self.agent_ws: Dict[str, WebSocket] = {}          # main process WS
+        self.agent_worker_ws: Dict[str, WebSocket] = {}   # RDP worker WS
         self.viewer_ws: Dict[str, Set[WebSocket]] = {}
         self.agent_hello: Dict[str, str] = {}
 
@@ -368,32 +397,58 @@ async def get_agent(aid: str) -> AgentState:
 
 
 async def send_command_to_agent(agent_id: str, command: dict) -> bool:
+    # Try main process WS first (handles system commands)
     agent_ws = HUB.agent_ws.get(agent_id)
     if agent_ws is not None:
         try:
             msg = json.dumps(command)
             await agent_ws.send_text(msg)
-            logger.info(f"[relay] Command sent locally to agent {agent_id}")
+            logger.info(f"[relay] Command sent to main WS agent {agent_id}, worker={WORKER_ID}")
             return True
         except Exception as e:
-            logger.error(f"[relay] Failed to send command to agent {agent_id}: {e}")
-            return False
+            logger.error(f"[relay] Failed to send command via main WS {agent_id}: {e}")
+            HUB.agent_ws.pop(agent_id, None)
+    
+    # Try RDP worker WS as fallback
+    worker_ws = HUB.agent_worker_ws.get(agent_id)
+    if worker_ws is not None:
+        try:
+            msg = json.dumps(command)
+            await worker_ws.send_text(msg)
+            logger.info(f"[relay] Command sent to worker WS agent {agent_id}, worker={WORKER_ID}")
+            return True
+        except Exception as e:
+            logger.error(f"[relay] Failed to send command via worker WS {agent_id}: {e}")
+            HUB.agent_worker_ws.pop(agent_id, None)
+    
+    # Check Redis: another worker might have this agent
     try:
         r = await get_redis()
-        worker = await r.get(REDIS_WORKER_KEY.format(aid=agent_id))
-        if not worker:
-            logger.warning(f"[relay] Agent {agent_id} not connected to any worker")
-            return False
-    except Exception:
-        pass
-    try:
-        msg = json.dumps(command)
-        await PS_MANAGER.publish(f"ctrl:to:{agent_id}", msg)
-        logger.info(f"[relay] Command published to Redis for agent {agent_id}")
-        return True
+        worker_key = await r.get(REDIS_WORKER_KEY.format(aid=agent_id))
+        if worker_key:
+            msg = json.dumps(command)
+            await PS_MANAGER.publish(f"ctrl:to:{agent_id}", msg)
+            worker_name = worker_key.decode() if isinstance(worker_key, bytes) else worker_key
+            logger.info(
+                f"[relay] Command published to Redis for agent {agent_id} on {worker_name} "
+                f"(requested from worker={WORKER_ID})"
+            )
+            return True
+        else:
+            logger.warning(
+                f"[relay] No worker key in Redis for agent {agent_id}, "
+                f"local WS not found either (agent_ws={agent_id in HUB.agent_ws}, "
+                f"agent_worker_ws={agent_id in HUB.agent_worker_ws})"
+            )
     except Exception as e:
-        logger.error(f"[relay] Failed to publish command for agent {agent_id}: {e}")
-        return False
+        logger.warning(f"[relay] Redis check/publish failed for {agent_id}: {e}")
+    
+    logger.warning(
+        f"[relay] Agent {agent_id} not connected to any worker. "
+        f"Current worker={WORKER_ID}, agent_ws_count={len(HUB.agent_ws)}, "
+        f"agent_worker_ws_count={len(HUB.agent_worker_ws)}"
+    )
+    return False
 
 
 # ============ AUTH HELPERS ============
@@ -442,22 +497,43 @@ async def ws_control_agent(ws: WebSocket, aid: str):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     except Exception:
         pass
-    old = HUB.agent_ws.get(aid)
-    if old is not None:
-        try:
-            await old.close()
-        except Exception:
-            pass
-    HUB.agent_ws[aid] = ws
+    role = ws.query_params.get("role", "main")
+    if role == "worker":
+        old = HUB.agent_worker_ws.get(aid)
+        if old is not None:
+            try:
+                await old.close()
+            except Exception:
+                pass
+        HUB.agent_worker_ws[aid] = ws
+    else:
+        old = HUB.agent_ws.get(aid)
+        if old is not None:
+            try:
+                await old.close()
+            except Exception:
+                pass
+        HUB.agent_ws[aid] = ws
     try:
         r = await get_redis()
-        await r.set(REDIS_WORKER_KEY.format(aid=aid), WORKER_ID, ex=60)
+        await r.set(REDIS_WORKER_KEY.format(aid=aid), WORKER_ID)
     except Exception:
         pass
-    logger.info(f"[relay] agent connected: {aid} worker={WORKER_ID}")
+    
+    logger.info(
+        f"[relay] agent connected: {aid} role={role} worker={WORKER_ID}, "
+        f"agent_ws_count={len(HUB.agent_ws)}, agent_worker_ws_count={len(HUB.agent_worker_ws)}"
+    )
+    
     try:
         while True:
             msg = await ws.receive_text()
+            # Keep worker key alive while agent sends messages
+            try:
+                r = await get_redis()
+                await r.expire(REDIS_WORKER_KEY.format(aid=aid), 30)
+            except Exception:
+                pass
             try:
                 obj = json.loads(msg)
             except Exception:
@@ -477,15 +553,24 @@ async def ws_control_agent(ws: WebSocket, aid: str):
     except Exception as e:
         logger.error(f"[relay] agent {aid}: {e}")
     finally:
+        cleaned = False
         if HUB.agent_ws.get(aid) is ws:
             HUB.agent_ws.pop(aid, None)
             HUB.agent_hello.pop(aid, None)
+            cleaned = True
+        if HUB.agent_worker_ws.get(aid) is ws:
+            HUB.agent_worker_ws.pop(aid, None)
+            cleaned = True
+        if cleaned and aid not in HUB.agent_ws and aid not in HUB.agent_worker_ws:
             try:
                 r = await get_redis()
                 await r.delete(REDIS_WORKER_KEY.format(aid=aid))
             except Exception:
                 pass
-        logger.info(f"[relay] agent disconnected: {aid} worker={WORKER_ID}")
+        logger.info(
+            f"[relay] agent disconnected: {aid} role={role} worker={WORKER_ID}, "
+            f"agent_ws_count={len(HUB.agent_ws)}, agent_worker_ws_count={len(HUB.agent_worker_ws)}"
+        )
 
 
 @router.websocket("/ws/control/viewer/{aid}")
@@ -607,7 +692,7 @@ async def ingest(aid: str, request: Request):
         a.updated = time.time()
         await a.persist_runtime()
         client_host = request.client.host if request.client else "unknown"
-        logger.info(f"[relay] h264/{a.encoder_current} <- {client_host} id={aid}")
+        logger.info(f"[relay] h264/{a.encoder_current} <- {client_host} id={aid}, worker={WORKER_ID}")
         frame_count = 0
         try:
             async for chunk in request.stream():
@@ -619,14 +704,14 @@ async def ingest(aid: str, request: Request):
                         await a.persist_runtime()
         except Exception as e:
             logger.error(f"[relay] h264 {aid} err: {e}")
-        logger.info(f"[relay] h264 {aid} stream finished: {frame_count} chunks, total keyframes={a.h264_count}")
+        logger.info(f"[relay] h264 {aid} stream finished: {frame_count} chunks, total keyframes={a.h264_count}, worker={WORKER_ID}")
         return {"status": "ok", "mode": "h264"}
     else:
         a.codec_current = "mjpeg"
         a.updated = time.time()
         await a.persist_runtime()
         client_host = request.client.host if request.client else "unknown"
-        logger.info(f"[relay] mjpeg <- {client_host} id={aid}")
+        logger.info(f"[relay] mjpeg <- {client_host} id={aid}, worker={WORKER_ID}")
         buf = bytearray()
         offset = 0
         frame_count = 0
@@ -647,10 +732,10 @@ async def ingest(aid: str, request: Request):
                         a._last_redis_sync = time.time()
                         await a.persist_runtime()
                     if frame_count % 10 == 0:
-                        logger.info(f"[relay] mjpeg {aid}: {frame_count} frames decoded so far")
+                        logger.info(f"[relay] mjpeg {aid}: {frame_count} frames decoded so far, worker={WORKER_ID}")
         except Exception as e:
             logger.error(f"[relay] mjpeg {aid} err: {e}", exc_info=True)
-        logger.info(f"[relay] mjpeg {aid} stream finished: {frame_count} frames decoded from {total_bytes} bytes, updated={a.updated}")
+        logger.info(f"[relay] mjpeg {aid} stream finished: {frame_count} frames decoded from {total_bytes} bytes, updated={a.updated}, worker={WORKER_ID}")
         return {"status": "ok", "mode": "mjpeg"}
 
 
@@ -745,7 +830,21 @@ async def list_agents() -> AgentsListResponse:
 
         alive = a.updated > 0 and (now - a.updated) < 30.0
         elapsed = now - a.updated if a.updated > 0 else 999.0
-        ctrl_local = aid in HUB.agent_ws
+        
+        # Log detailed agent status for debugging multi-worker issues
+        if not alive:
+            logger.warning(
+                f"[relay:list_agents] agent {aid} marked DEAD on worker={WORKER_ID}: "
+                f"a.updated={a.updated}, now={now}, elapsed={elapsed:.1f}s, "
+                f"threshold=30.0s, a._worker_id={a._worker_id}"
+            )
+        else:
+            logger.debug(
+                f"[relay:list_agents] agent {aid} ALIVE on worker={WORKER_ID}: "
+                f"elapsed={elapsed:.1f}s"
+            )
+        
+        ctrl_local = aid in HUB.agent_ws or aid in HUB.agent_worker_ws
         ctrl_any = ctrl_local
         if not ctrl_any:
             try:
