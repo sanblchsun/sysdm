@@ -74,7 +74,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
    → list_agents()
    → alive = (now - a.updated) < 30.0
    → if elapsed > 30s: agent marked DEAD
-   → Dashboard: "Выберите агентов..."
+   → Dashboard: "Выберите агентов в таблице для просмотра (галочка RDP)."
    ```
 
 ### ДОКАЗАТЕЛЬСТВО ИЗ ЛОГОВ
