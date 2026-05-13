@@ -222,7 +222,9 @@ class AgentState:
         upd = data.get("updated")
         if upd:
             parsed = float(upd)
-            self.updated = parsed if time.time() - parsed < 5 else time.time()
+            # Accept timestamps up to 30 seconds old (the alive timeout window)
+            # This allows for network delays and async persist operations
+            self.updated = parsed if time.time() - parsed < 30 else time.time()
         else:
             self.updated = time.time()
         self.codec_current = data.get("codec_current") or None
@@ -728,11 +730,13 @@ async def ingest(aid: str, request: Request):
                 for frame in frames:
                     a.push_mjpeg(frame)
                     frame_count += 1
-                    if frame_count % 30 == 0:
-                        a.updated = time.time()
-                    if frame_count % 10 == 0 and time.time() - a._last_redis_sync > 15:
+                    # Persist to Redis every frame to keep timestamp fresh across workers
+                    # push_mjpeg() already updated a.updated in memory
+                    if frame_count % 1 == 0:  # Every frame
                         a._last_redis_sync = time.time()
                         await a.persist_runtime()
+                        if frame_count % 100 == 0:  # Log every 100 frames to avoid spam
+                            logger.info(f"[relay] PERSIST: mjpeg {aid} timestamp {a.updated:.1f}, frame_count={frame_count}, worker={WORKER_ID}")
                     if frame_count % 10 == 0:
                         logger.info(f"[relay] mjpeg {aid}: {frame_count} frames decoded so far, worker={WORKER_ID}")
         except Exception as e:
@@ -829,6 +833,13 @@ async def list_agents() -> AgentsListResponse:
                         AGENTS[aid] = a
             except Exception:
                 continue
+        else:
+            # Agent exists in memory, but reload timestamp from Redis
+            # to ensure fresh data for alive status across workers
+            try:
+                await a.load_from_redis()
+            except Exception:
+                pass
 
         alive = a.updated > 0 and (now - a.updated) < 30.0
         elapsed = now - a.updated if a.updated > 0 else 999.0
