@@ -50,9 +50,13 @@ class PubSubManager:
         logger.info(f"[pubsub] worker={WORKER_ID} subscribed to ctrl:* video:*")
 
     async def _run(self):
+        ps = self._pubsub
+        if ps is None:
+            logger.error("[pubsub] _run called before start()")
+            return
         while True:
             try:
-                async for msg in self._pubsub.listen():
+                async for msg in ps.listen():
                     if msg["type"] != "pmessage":
                         continue
                     await self._dispatch(msg)
@@ -177,7 +181,7 @@ class AgentState:
     async def load_from_redis(self):
         r = await get_redis()
         key = REDIS_AGENT_KEY.format(aid=self.aid)
-        data = await r.hgetall(key)
+        data = await r.hgetall(key)  # type: ignore[misc]
         if not data:
             self.updated = time.time()
             return
@@ -203,7 +207,7 @@ class AgentState:
     async def persist_runtime(self):
         r = await get_redis()
         key = REDIS_AGENT_KEY.format(aid=self.aid)
-        await r.hset(key, mapping={
+        await r.hset(key, mapping={  # type: ignore[misc]
             "codec_current": self.codec_current or "",
             "encoder_current": self.encoder_current or "",
             "bitrate_current": self.bitrate_current or "",
@@ -216,7 +220,7 @@ class AgentState:
         r = await get_redis()
         key = REDIS_AGENT_KEY.format(aid=self.aid)
         if changed:
-            await r.hset(key, mapping=changed)
+            await r.hset(key, mapping=changed)  # type: ignore[misc]
             await r.expire(key, REDIS_AGENT_TTL)
 
     def push_mjpeg(self, frame: bytes):
@@ -284,7 +288,7 @@ async def _cleanup_dead_agents():
         r = await get_redis()
         for aid in dead:
             key = REDIS_AGENT_KEY.format(aid=aid)
-            redis_upd = await r.hget(key, "updated")
+            redis_upd = await r.hget(key, "updated")  # type: ignore[misc]
             if redis_upd and time.time() - float(redis_upd) < 120:
                 continue
             logger.info(f"[cleanup] removing dead agent: {aid}")
@@ -433,7 +437,7 @@ async def _ws_auth_ok(ws: WebSocket) -> bool:
 async def ws_control_agent(ws: WebSocket, aid: str):
     await ws.accept()
     try:
-        sock = ws._transport.get_extra_info('socket')
+        sock = ws._transport.get_extra_info('socket')  # type: ignore[attr-defined]
         if sock:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     except Exception:
@@ -488,7 +492,7 @@ async def ws_control_agent(ws: WebSocket, aid: str):
 async def ws_control_viewer(ws: WebSocket, aid: str):
     await ws.accept()
     try:
-        sock = ws._transport.get_extra_info('socket')
+        sock = ws._transport.get_extra_info('socket')  # type: ignore[attr-defined]
         if sock:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     except Exception:
@@ -602,7 +606,8 @@ async def ingest(aid: str, request: Request):
         a.codec_current = "h264"
         a.updated = time.time()
         await a.persist_runtime()
-        logger.info(f"[relay] h264/{a.encoder_current} <- {request.client.host} id={aid}")
+        client_host = request.client.host if request.client else "unknown"
+        logger.info(f"[relay] h264/{a.encoder_current} <- {client_host} id={aid}")
         frame_count = 0
         try:
             async for chunk in request.stream():
@@ -620,7 +625,8 @@ async def ingest(aid: str, request: Request):
         a.codec_current = "mjpeg"
         a.updated = time.time()
         await a.persist_runtime()
-        logger.info(f"[relay] mjpeg <- {request.client.host} id={aid}")
+        client_host = request.client.host if request.client else "unknown"
+        logger.info(f"[relay] mjpeg <- {client_host} id={aid}")
         buf = bytearray()
         offset = 0
         frame_count = 0

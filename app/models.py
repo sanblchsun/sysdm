@@ -5,7 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 from passlib.context import CryptContext
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -18,7 +18,7 @@ class Company(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    external_ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    external_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
 
     # Отношения
     departments: Mapped[list["Department"]] = relationship(
@@ -81,13 +81,13 @@ class Agent(Base):
     company: Mapped["Company"] = relationship(back_populates="agents")
 
     # Department может быть пустым (Unassigned)
-    department_id: Mapped[Optional[int]] = mapped_column(
+    department_id: Mapped[int | None] = mapped_column(
         ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
     )
-    department: Mapped[Optional["Department"]] = relationship(back_populates="agents")
+    department: Mapped["Department | None"] = relationship(back_populates="agents")
 
     # 1:1 системная информация
-    additional_data: Mapped[Optional["AgentAdditionalData"]] = relationship(
+    additional_data: Mapped["AgentAdditionalData | None"] = relationship(
         back_populates="agent", uselist=False, cascade="all, delete-orphan"
     )
 
@@ -101,7 +101,7 @@ class Agent(Base):
     )  # индекс для heartbeat
 
     # Версия билда exe
-    exe_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    exe_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Режим телеметрии (none, basic, full)
     telemetry_mode: Mapped[str] = mapped_column(String(20), default="none", nullable=False)
@@ -117,15 +117,15 @@ class AgentAdditionalData(Base):
     agent: Mapped["Agent"] = relationship(back_populates="additional_data")
 
     # ===== Системная информация =====
-    system: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    user_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    ip_addr: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)  # IPv6
-    external_ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    system: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ip_addr: Mapped[str | None] = mapped_column(String(45), nullable=True)  # IPv6
+    external_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
 
     # ===== Ресурсы =====
-    disks: Mapped[Optional[List[Dict[str, Any]]]] = mapped_column(JSON, nullable=True)
-    total_memory: Mapped[Optional[int]] = mapped_column(nullable=True)
-    available_memory: Mapped[Optional[int]] = mapped_column(nullable=True)
+    disks: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    total_memory: Mapped[int | None] = mapped_column(nullable=True)
+    available_memory: Mapped[int | None] = mapped_column(nullable=True)
 
 
 class User(Base):

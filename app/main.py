@@ -1,6 +1,6 @@
 # app/main.py
 import asyncio
-import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
@@ -12,12 +12,23 @@ from app.api import web_cookie
 from app.middleware.auth_html import AuthHTMLMiddleware
 from app.api.agent import router as agent_router
 
-app = FastAPI(title="SysDM RMM")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(relay._cleanup_dead_agents())
+    await relay.PS_MANAGER.start()
+    yield
+    await relay.PS_MANAGER.stop()
+    from app.redis_client import close_redis
+    await close_redis()
+
+
+app = FastAPI(title="SysDM RMM", lifespan=lifespan)
 app.add_middleware(AuthHTMLMiddleware)
 
 # Статика и шаблоны
-current_dir = os.path.dirname(os.path.abspath(__file__))
-static_path = os.path.join(current_dir, "static")
+current_dir = Path(__file__).parent
+static_path = current_dir / "static"
 app.mount("/static", StaticFiles(directory=static_path), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
@@ -43,16 +54,6 @@ async def compat_relay_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(relay._cleanup_dead_agents())
-    await relay.PS_MANAGER.start()
-
-@app.on_event("shutdown")
-async def shutdown():
-    await relay.PS_MANAGER.stop()
-    from app.redis_client import close_redis
-    await close_redis()
 
 
 # API

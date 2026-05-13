@@ -1,6 +1,6 @@
 # app/schemas/agent_update.py
 from pydantic import BaseModel
-from typing import Optional
+
 
 
 class AgentCheckUpdateIn(BaseModel):
@@ -9,7 +9,7 @@ class AgentCheckUpdateIn(BaseModel):
 
 class AgentCheckUpdateOut(BaseModel):
     update: bool
-    build: Optional[str] = None
-    url: Optional[str] = None
-    sha256: Optional[str] = None
+    build: str | None = None
+    url: str | None = None
+    sha256: str | None = None
     force: bool = False

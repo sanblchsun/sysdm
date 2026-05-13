@@ -44,21 +44,21 @@ REDIS_PENDING_TTL = 300
 async def _push_pending_command(uuid: str, command: dict):
     r = await get_redis()
     key = REDIS_PENDING_CMD_KEY.format(uuid=uuid)
-    await r.rpush(key, json.dumps(command))
+    await r.rpush(key, json.dumps(command))  # type: ignore[misc]
     await r.expire(key, REDIS_PENDING_TTL)
 
 async def _pop_pending_command(uuid: str) -> dict | None:
     r = await get_redis()
     key = REDIS_PENDING_CMD_KEY.format(uuid=uuid)
-    data = await r.lpop(key)
-    if data:
+    data = await r.lpop(key)  # type: ignore[misc]
+    if isinstance(data, str):
         return json.loads(data)
     return None
 
 async def _push_command_result(uuid: str, data: dict):
     r = await get_redis()
     key = REDIS_PENDING_RESULT_KEY.format(uuid=uuid)
-    await r.rpush(key, json.dumps(data))
+    await r.rpush(key, json.dumps(data))  # type: ignore[misc]
     await r.expire(key, REDIS_PENDING_TTL)
 
 
@@ -140,7 +140,7 @@ async def register_agent(
     result = await session.execute(
         select(Agent).where(Agent.machine_uid == data.machine_uid)
     )
-    agent = result.scalars().first()
+    agent: Agent | None = result.scalars().first()  # type: ignore[assignment]
 
     now = datetime.utcnow()
 

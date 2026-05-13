@@ -1,6 +1,6 @@
 # app/schemas/agent.py
 from pydantic import BaseModel
-from typing import Optional, List
+
 
 
 class DiskInfoSchema(BaseModel):
@@ -14,7 +14,7 @@ class AgentRegisterIn(BaseModel):
     name_pc: str
 
     exe_version: str | None = None
-    company_id: Optional[int] = None
+    company_id: int | None = None
     system: str | None = None
     user_name: str | None = None
     ip_addr: str | None = None

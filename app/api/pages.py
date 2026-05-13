@@ -1,5 +1,4 @@
 # app/api/pages.py
-from typing import Optional
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Request, Query, Depends
 from fastapi.responses import JSONResponse
@@ -33,8 +32,8 @@ async def tree(request: Request, session: AsyncSession = Depends(get_db)):
 @router.get("/ui/top-panel")
 async def top_panel(
     request: Request,
-    target_id: Optional[int] = Query(None),
-    target_type: Optional[str] = Query(None),
+    target_id: int | None = Query(None),
+    target_type: str | None = Query(None),
     session: AsyncSession = Depends(get_db),
 ):
     agents = []
@@ -215,7 +214,7 @@ async def rdp_dashboard(request: Request):
 @router.get("/rdp/viewer")
 async def rdp_viewer(
     request: Request,
-    agent_id: Optional[str] = Query(None),
+    agent_id: str | None = Query(None),
 ):
     """
     RDP Viewer - полноэкранный просмотр и управление рабочим столом агента.

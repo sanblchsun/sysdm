@@ -1,5 +1,4 @@
 # app/config.py
-from typing import ClassVar
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
 
