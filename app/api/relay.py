@@ -194,7 +194,7 @@ class AgentState:
         self.bitrate_current: Optional[str] = None
         self.fps_current: Optional[int] = None
 
-        self.mjpeg_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
+        self.mjpeg_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
 
         self.h264_keyframe_buffer = bytearray()
         self.h264_subscribers: Set[asyncio.Queue] = set()
@@ -222,7 +222,7 @@ class AgentState:
         upd = data.get("updated")
         if upd:
             parsed = float(upd)
-            self.updated = parsed if time.time() - parsed < 60 else time.time()
+            self.updated = parsed if time.time() - parsed < 5 else time.time()
         else:
             self.updated = time.time()
         self.codec_current = data.get("codec_current") or None
@@ -728,6 +728,8 @@ async def ingest(aid: str, request: Request):
                 for frame in frames:
                     a.push_mjpeg(frame)
                     frame_count += 1
+                    if frame_count % 30 == 0:
+                        a.updated = time.time()
                     if frame_count % 10 == 0 and time.time() - a._last_redis_sync > 15:
                         a._last_redis_sync = time.time()
                         await a.persist_runtime()
