@@ -106,17 +106,25 @@ class PubSubManager:
 
         elif channel.startswith("video:mjpeg:"):
             aid = channel[12:]
-            a = AGENTS.get(aid)
-            if a:
-                frame = data if isinstance(data, bytes) else data.encode()
-                a.push_mjpeg(frame)
+            try:
+                async with LOCK:
+                    a = AGENTS.get(aid)
+                if a:
+                    frame = data if isinstance(data, bytes) else data.encode()
+                    a.push_mjpeg(frame)
+            except Exception as e:
+                logger.warning(f"[relay] Error pushing MJPEG frame for {aid}: {e}")
 
         elif channel.startswith("video:h264:"):
             aid = channel[11:]
-            a = AGENTS.get(aid)
-            if a:
-                chunk = data if isinstance(data, bytes) else data.encode()
-                a.push_h264(chunk)
+            try:
+                async with LOCK:
+                    a = AGENTS.get(aid)
+                if a:
+                    chunk = data if isinstance(data, bytes) else data.encode()
+                    a.push_h264(chunk)
+            except Exception as e:
+                logger.warning(f"[relay] Error pushing H264 chunk for {aid}: {e}")
 
     async def publish(self, channel: str, message):
         if self._pubsub_conn:
@@ -364,13 +372,13 @@ def find_idr_offset(buf: bytes) -> int:
 
 
 async def get_agent(aid: str) -> AgentState:
-    a = AGENTS.get(aid)
-    if a is not None:
-        return a
+    """Get or create agent state with proper locking"""
     async with LOCK:
         a = AGENTS.get(aid)
         if a is not None:
             return a
+        
+        # Agent not in cache, create new one
         a = AgentState(aid)
         try:
             await a.load_from_redis()
@@ -788,8 +796,11 @@ async def list_agents() -> AgentsListResponse:
     now = time.time()
     out = []
 
-    # Collect from local cache + Redis
-    agent_ids: set = set(AGENTS.keys())
+    # Collect from local cache + Redis (with proper locking)
+    async with LOCK:
+        agent_ids: set = set(AGENTS.keys())
+    
+    # Also scan Redis for agents not in local cache
     try:
         r = await get_redis()
         cursor = 0
@@ -801,14 +812,17 @@ async def list_agents() -> AgentsListResponse:
                 agent_ids.add(aid)
             if cursor == 0:
                 break
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[relay] Failed to scan Redis for agents: {e}")
 
     for aid in agent_ids:
-        a = AGENTS.get(aid)
+        async with LOCK:
+            a = AGENTS.get(aid)
+        
         if a is None:
             try:
                 async with LOCK:
+                    # Double-check pattern to avoid race condition
                     a = AGENTS.get(aid)
                     if a is not None:
                         pass
@@ -816,7 +830,8 @@ async def list_agents() -> AgentsListResponse:
                         a = AgentState(aid)
                         await a.load_from_redis()
                         AGENTS[aid] = a
-            except Exception:
+            except Exception as e:
+                logger.error(f"[relay] Failed to load agent {aid}: {e}")
                 continue
 
         alive = a.updated > 0 and (now - a.updated) < 30.0

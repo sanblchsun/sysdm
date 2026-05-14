@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from app.core.auth_agent import get_agent_by_token
 from app.database import get_db
 from app.models import Agent, AgentAdditionalData, Company
@@ -35,6 +35,11 @@ import json
 # -------------------- TOP PANEL --------------------
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 UPDATE_INTERVAL = timedelta(seconds=60)
+
+# Rate limiter (initialized in main.py)
+def get_limiter():
+    from app.main import limiter
+    return limiter
 
 # ==================== COMMANDS (Redis Pub/Sub) ====================
 # Commands are published via Redis Pub/Sub for immediate delivery
@@ -68,7 +73,7 @@ async def _publish_agent_status(uuid: str, is_online: bool):
     status = {
         "uuid": uuid,
         "is_online": is_online,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     await r.publish(REDIS_AGENT_STATUS_CHANNEL, json.dumps(status))  # type: ignore[misc]
 
@@ -153,7 +158,7 @@ async def register_agent(
     )
     agent: Agent | None = result.scalars().first()  # type: ignore[assignment]
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if agent:
         # обновляем существующего
@@ -222,7 +227,7 @@ async def agent_telemetry(
     if data.exe_version:
         agent.exe_version = data.exe_version
 
-    agent.last_seen = datetime.utcnow()
+    agent.last_seen = datetime.now(timezone.utc)
     await session.commit()
     return {"status": "ok", "agent_uuid": agent.uuid}
 
@@ -234,7 +239,7 @@ async def agent_heartbeat(
     agent: Agent = Depends(get_agent_by_token),
     session: AsyncSession = Depends(get_db),
 ):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Обновляем last_seen не чаще чем раз в UPDATE_INTERVAL секунд
     if not agent.last_seen or now - agent.last_seen > UPDATE_INTERVAL:
