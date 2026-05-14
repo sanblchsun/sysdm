@@ -168,25 +168,25 @@ async function takeControl() {
   _takeControlBusy = true;
   console.log("[takeControl] Clicked");
 
-  const bottomPanel = document.querySelector('.bottom-panel');
-  const agentId = bottomPanel ? (bottomPanel.getAttribute('data-agent-id') || null) : null;
+  try {
+    const bottomPanel = document.querySelector('.bottom-panel');
+    const agentId = bottomPanel ? (bottomPanel.getAttribute('data-agent-id') || null) : null;
 
-  if (!agentId) {
-    alert("Agent not selected. Please select an agent first.");
-    return;
-  }
-
-  // Check if this agent has RDP checkbox checked
-  const selected = getSelectedAgents();
-  const agentUuid = bottomPanel.getAttribute('data-agent-uuid') || null;
-
-  if (agentUuid && !selected[agentUuid]) {
-    if (!confirm("Агент не отмечен для RDP (галочка RDP в таблице). Всё равно запустить?")) {
+    if (!agentId) {
+      alert("Agent not selected. Please select an agent first.");
       return;
     }
-  }
 
-  try {
+    // Check if this agent has RDP checkbox checked
+    const selected = getSelectedAgents();
+    const agentUuid = bottomPanel.getAttribute('data-agent-uuid') || null;
+
+    if (agentUuid && !selected[agentUuid]) {
+      if (!confirm("Агент не отмечен для RDP (галочка RDP в таблице). Всё равно запустить?")) {
+        return;
+      }
+    }
+
     const response = await fetch(`/api/agent/${agentId}/start-rdp`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -202,19 +202,16 @@ async function takeControl() {
 
     if (data.agent_connected) {
       alert("✓ Команда запуска RDP отправлена агенту. Открываю дашборд...");
+      window.open('/rdp/dashboard', '_blank');
     } else {
       alert("Агент не подключён к WebSocket. Попробуйте позже.");
-      return;
     }
   } catch (error) {
     console.error("[takeControl] Error:", error);
     alert("Failed to start RDP: " + error.message);
+  } finally {
     _takeControlBusy = false;
-    return;
   }
-
-  window.open('/rdp/dashboard', '_blank');
-  _takeControlBusy = false;
 }
 
 // ==================== LOGIN SESSION (Switch Windows User) ====================
