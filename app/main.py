@@ -108,6 +108,9 @@ async def compat_relay_middleware(request: Request, call_next):
 @app.get("/healthz")
 async def healthz():
     """Health check endpoint - verify all critical services are operational"""
+    redis_status = "unknown"
+    db_status = "unknown"
+    
     try:
         # Check Redis connection
         r = await get_redis()
@@ -124,6 +127,7 @@ async def healthz():
             from sqlalchemy import select, text
             await session.execute(select(text("1")))
             db_status = "ok"
+            break  # Exit loop after successful check
     except Exception as e:
         logger.error(f"[healthz] Database check failed: {e}")
         db_status = f"error: {str(e)}"

@@ -38,9 +38,8 @@
 ## 📝 MODIFIED FILES
 
 ### 1. `requirements.txt`
-**Changes:** Added 2 new dependencies
+**Changes:** Added 1 new dependency
 ```
-+ tenacity==8.2.3        # Retry logic with exponential backoff
 + slowapi==0.1.9         # Rate limiting for FastAPI
 ```
 **Action Required:** Run `pip install --upgrade -r requirements.txt`
@@ -48,12 +47,13 @@
 ---
 
 ### 2. `app/redis_client.py`
-**Changes:** Complete rewrite with retry logic
-- Added `AsyncRetrying` for exponential backoff
-- 3 retry attempts with 1-10 second intervals
+**Changes:** Implemented retry logic with exponential backoff
+- Removed tenacity dependency (using simple for loop instead)
+- 3 retry attempts with exponential backoff (1s, 2s, 4s, max 10s)
 - Added socket keepalive settings
 - Comprehensive logging at each step
 - Graceful shutdown in close_redis()
+- Proper double-check locking pattern
 
 **Breaking Changes:** None (backwards compatible)
 

@@ -32,17 +32,18 @@ Comprehensive optimization and security hardening of the SysDM FastAPI project a
 # BEFORE: No retry logic
 redis_client = aioredis.from_url(...)
 
-# AFTER: 3 attempts with exponential backoff
-async for attempt in AsyncRetrying(
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    stop=stop_after_attempt(3)
-):
+# AFTER: Exponential backoff retry (1s, 2s, 4s, max 10s)
+for attempt in range(1, max_retries + 1):
     try:
         redis_client = aioredis.from_url(...)
         await redis_client.ping()
-        break
+        return redis_client
     except Exception as e:
-        logger.warning(f"Connection attempt {attempt.retry_number} failed: {e}")
+        logger.warning(f"Connection attempt {attempt}/{max_retries} failed: {e}")
+        if attempt >= max_retries:
+            raise
+        await asyncio.sleep(min(retry_delay, 10))
+        retry_delay *= 2
 ```
 
 **Impact:** ✅ Application survives Redis restarts/network blips  
@@ -164,12 +165,15 @@ for aid in agent_ids:
 
 **Added Packages:**
 ```
-tenacity==8.2.3        # Retry logic with exponential backoff
 slowapi==0.1.9         # Rate limiting for FastAPI
 ```
 
+**Removed Packages:**
+```
+tenacity==8.2.3        # (not needed - using simple retry loop in redis_client.py)
+```
+
 **Usage:**
-- `tenacity` - Used for Redis connection retry logic
 - `slowapi` - Used for API rate limiting on critical endpoints
 
 **Installation:**
@@ -397,6 +401,9 @@ except Exception as e:
 @app.get("/healthz")
 async def healthz():
     """Health check endpoint for Docker and monitoring"""
+    redis_status = "unknown"
+    db_status = "unknown"
+    
     try:
         r = await get_redis()
         await r.ping()
@@ -406,8 +413,10 @@ async def healthz():
     
     try:
         async for session in get_db():
+            from sqlalchemy import select, text
             await session.execute(select(text("1")))
             db_status = "ok"
+            break
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database unavailable: {e}")
     
