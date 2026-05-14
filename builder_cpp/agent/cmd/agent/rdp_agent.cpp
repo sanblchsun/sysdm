@@ -1190,8 +1190,12 @@ void RDPAgent::handle_control(const std::string &j)
             }
             else if (cmd == "stop-rdp-worker")
             {
-                log("handle_control: stop-rdp-worker command received, stopping");
-                runtime.stop = true;
+                // IMPORTANT: Worker should NOT handle stop-rdp-worker!
+                // This command is for the MAIN process (agent.exe service).
+                // Main process receives it via control WebSocket and calls stopRDPWorker()
+                // which terminates this worker process gracefully.
+                // Worker ignoring this ensures main has full control over shutdown sequence.
+                log("handle_control: stop-rdp-worker command IGNORED (main process handles it)");
             }
         }
     }
@@ -1359,7 +1363,7 @@ void RDPAgent::control_loop()
             std::this_thread::sleep_for(std::chrono::seconds(3));
             continue;
         }
-        std::string path = "/relay/ws/control/agent/" + config.agent_id;
+        std::string path = "/relay/ws/control/worker/" + config.agent_id;
         if (!ws_handshake(c, config.server_host, config.server_port, path))
         {
             log("ctrl wss handshake failed");

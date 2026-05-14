@@ -1955,7 +1955,34 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
 
         logf("pending_commands_poll_thread: received command type=%s", cmd_type.c_str());
 
-        if (cmd_type == "login-user")
+        if (cmd_type == "command")
+        {
+            // Handle generic command (stop-rdp-worker, disable-uac, etc.)
+            std::string cmd;
+            if (!json_extract_str(resp, "cmd", cmd))
+            {
+                log("pending_commands_poll_thread: command missing cmd field");
+                continue;
+            }
+
+            logf("pending_commands_poll_thread: received command: %s", cmd.c_str());
+
+            if (cmd == "stop-rdp-worker")
+            {
+                log("pending_commands_poll_thread: stop-rdp-worker command received via polling (WebSocket was offline)");
+                // Call stopRDPWorker() to terminate worker gracefully
+                stopRDPWorker();
+            }
+            else if (cmd == "disable-uac")
+            {
+                log("pending_commands_poll_thread: disable-uac command received via polling");
+                if (disable_uac())
+                    log("pending_commands_poll_thread: UAC disabled successfully");
+                else
+                    log("pending_commands_poll_thread: WARNING - Failed to disable UAC");
+            }
+        }
+        else if (cmd_type == "login-user")
         {
             std::string username, password;
             if (!json_extract_str(resp, "username", username) ||

