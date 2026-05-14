@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = ""
     DB_NAME: str = ""
     DB_HOST: str = ""
+    DB_HOST_SCRIPT: str = "localhost"
 
     # === Приложение ===
     APP_TITLE: str
@@ -45,6 +46,11 @@ class Settings(BaseSettings):
             return db_url
         # Fallback на составленный URL из отдельных переменных
         return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:5432/{self.DB_NAME}"
+
+    @property
+    def DATABASE_URL_SCRIPT(self):
+        # URL базы данных для запуска скриптов (используется локальный хост)
+        return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST_SCRIPT}:5432/{self.DB_NAME}"
 
     model_config = SettingsConfigDict(env_file=".env")
 

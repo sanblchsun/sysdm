@@ -10,8 +10,20 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from sqlalchemy import select
-from app.database import AsyncSessionLocal
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from app.config import settings
 from app.models import AgentBuild
+from app.database import Base
+
+# Используем DB_HOST_SCRIPT для локального запуска скриптов
+engine = create_async_engine(
+    settings.DATABASE_URL_SCRIPT,
+    echo=settings.DEBUG,
+)
+
+AsyncSessionLocal = async_sessionmaker(
+    engine, expire_on_commit=False, class_=AsyncSession
+)
 
 INSTALL_CMD = PROJECT_ROOT / "builder_cpp" / "install.cmd"
 DIST_DIR = PROJECT_ROOT / "dist"
