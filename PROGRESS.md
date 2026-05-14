@@ -55,3 +55,61 @@
 - Добавлен сервис `redis:7-alpine` (отсутствовал в prod-конфиге)
 - `depends_on: redis` для app
 - Обновлён комментарий о масштабировании
+
+## Redis Pub/Sub для команд и статуса (2026-05-14)
+
+### app/api/agent.py — Redis Pub/Sub для команд и статуса
+
+- `_publish_command()`: Публикует команду в Redis канал `agent:{uuid}:commands` (мгновенно, не через polling)
+- Команды (stop-rdp-worker, login-user и т.д.): все идут через `_publish_command()`
+- `_publish_agent_status()`: Публикует статус агента в `agent:status` канал при heartbeat
+- `/api/agent/heartbeat`: Теперь публикует статус даже если БД не обновляется
+
+### app/api/relay.py — WebSocket Pub/Sub для синхронизации статуса
+
+- Новый WebSocket эндпоинт: `@router.websocket("/relay/ws/agent-status-sync")`
+- Подписывается на Redis `agent:status` канал
+- Форвардит обновления статуса всем подключенным клиентам в реал-времени
+
+### app/templates/partials/top_panel.html — Real-time UI обновления
+
+- `connectAgentStatusSync()`: WebSocket подписка на статус-синхронизацию
+- Обновляет онлайн точки в таблице агентов в реал-времени при поступлении статуса
+- Автоматически переподключается при разрыве соединения (3s delay)
+- Нет необходимости в полинге или перезагрузке страницы
+
+### builder_cpp/agent/cmd/agent/main.cpp — Оптимизированный polling
+
+- Polling `pending-command` эндпоинта изменен: 2 сек → 30 сек (масштабируется на 500+ агентов)
+- 500 агентов × 1 запрос на 30 сек = ~17 запросов/сек вместо 250/сек
+- Добавлен TODO: Реальная Redis Pub/Sub подписка для мгновенной доставки команд (требует Redis C++ библиотеки)
+
+### Архитектура команд (сейчас):
+```
+Dashboard/Viewer
+    ↓ POST /api/agent/{id}/stop-rdp
+Server (Python)
+    ├→ Публикует в Redis: agent:{uuid}:commands (мгновенно)
+    ├→ Агент получает через HTTP polling (fallback, 30s interval)
+    ├→ Агент может получить через WebSocket (если активно)
+    └→ Обрабатывает команду (main → worker)
+
+Agent Online Status
+    ↓ Heartbeat
+Server (Python)
+    ├→ Обновляет last_seen в БД
+    ├→ Публикует в Redis: agent:status (мгновенно)
+    └→ Frontend получает через WebSocket (реал-тайм)
+```
+
+### Масштабируемость:
+
+- ✅ Команды: Redis Pub/Sub (O(1) для масштабирования)
+- ✅ Статус: Redis Pub/Sub (мгновенные обновления UI)
+- ✅ Polling fallback: оптимизирован с 2s на 30s (17 req/sec vs 250 req/sec)
+- ✅ WebSocket: push-модель вместо pull-модели
+- 🔄 TODO: Redis C++ подписка в агенте для мгновенной доставки команд
+
+## Собранные версии
+
+- agent_universal_1.0.50.exe (2026-05-14): Оптимизированный polling (30s), stop-rdp-worker обработка

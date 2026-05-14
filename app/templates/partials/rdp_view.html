@@ -580,6 +580,56 @@
         } catch {}
       }, 3000);
 
+      // ========= CLEANUP ON PAGE CLOSE =========
+      let cleanupDone = false;
+
+      async function stopRDPStream() {
+        if (cleanupDone) return;
+        cleanupDone = true;
+
+        console.log("[rdp] Stopping RDP stream...");
+
+        // 1. Send stop-rdp-worker command to agent via control WebSocket
+        if (ctrlWs && ctrlWs.readyState === WebSocket.OPEN) {
+          try {
+            const stopCmd = JSON.stringify({
+              type: "command",
+              cmd: "stop-rdp-worker",
+            });
+            ctrlWs.send(stopCmd);
+            console.log("[rdp] Sent stop-rdp-worker command");
+          } catch (e) {
+            console.error("[rdp] Failed to send stop command:", e);
+          }
+        }
+
+        // 2. Close control WebSocket
+        if (ctrlWs) {
+          try {
+            ctrlWs.close(1000, "Page unload");
+            console.log("[rdp] Control WebSocket closed");
+          } catch (e) {
+            console.error("[rdp] Failed to close control WS:", e);
+          }
+          ctrlWs = null;
+        }
+
+        // 3. The video stream WebSocket will be closed by the browser automatically
+        // when the page unloads
+      }
+
+      // Handle page unload/close
+      window.addEventListener("beforeunload", stopRDPStream, { once: true });
+      window.addEventListener("unload", stopRDPStream, { once: true });
+
+      // Also handle tab/window close via visibility change
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          console.log("[rdp] Page hidden, stopping stream...");
+          stopRDPStream();
+        }
+      });
+
       openCtrlWS();
       start();
     </script>

@@ -36,30 +36,39 @@ import json
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 UPDATE_INTERVAL = timedelta(seconds=60)
 
-# ==================== PENDING COMMANDS (multi-worker via Redis) ====================
-REDIS_PENDING_CMD_KEY = "pending_cmd:{uuid}"
+# ==================== COMMANDS (Redis Pub/Sub) ====================
+# Commands are published via Redis Pub/Sub for immediate delivery
+# Results are stored in queue for agent to poll
+REDIS_COMMAND_CHANNEL = "agent:{uuid}:commands"
 REDIS_PENDING_RESULT_KEY = "pending_result:{uuid}"
 REDIS_PENDING_TTL = 300
 
-async def _push_pending_command(uuid: str, command: dict):
+async def _publish_command(uuid: str, command: dict):
+    """Publish command to agent via Redis Pub/Sub (immediate delivery, not polled)"""
     r = await get_redis()
-    key = REDIS_PENDING_CMD_KEY.format(uuid=uuid)
-    await r.rpush(key, json.dumps(command))  # type: ignore[misc]
-    await r.expire(key, REDIS_PENDING_TTL)
-
-async def _pop_pending_command(uuid: str) -> dict | None:
-    r = await get_redis()
-    key = REDIS_PENDING_CMD_KEY.format(uuid=uuid)
-    data = await r.lpop(key)  # type: ignore[misc]
-    if isinstance(data, str):
-        return json.loads(data)
-    return None
+    channel = REDIS_COMMAND_CHANNEL.format(uuid=uuid)
+    await r.publish(channel, json.dumps(command))  # type: ignore[misc]
 
 async def _push_command_result(uuid: str, data: dict):
+    """Store command result in queue for agent to poll"""
     r = await get_redis()
     key = REDIS_PENDING_RESULT_KEY.format(uuid=uuid)
     await r.rpush(key, json.dumps(data))  # type: ignore[misc]
     await r.expire(key, REDIS_PENDING_TTL)
+
+# ==================== AGENT STATUS (Redis Pub/Sub) ====================
+REDIS_AGENT_STATUS_CHANNEL = "agent:status"
+REDIS_AGENT_TTL = 60  # Status TTL for online detection
+
+async def _publish_agent_status(uuid: str, is_online: bool):
+    """Publish agent online/offline status via Redis Pub/Sub for real-time UI updates"""
+    r = await get_redis()
+    status = {
+        "uuid": uuid,
+        "is_online": is_online,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    await r.publish(REDIS_AGENT_STATUS_CHANNEL, json.dumps(status))  # type: ignore[misc]
 
 
 @router.post("/register", response_model=AgentRegisterOut)
@@ -232,11 +241,17 @@ async def agent_heartbeat(
         )
         await session.commit()
 
+        # Publish agent online status to Redis for real-time UI updates (no polling delay)
+        await _publish_agent_status(agent.uuid, is_online=True)
+
         return {
             "status": "ok",
             "agent_uuid": agent.uuid,
             "last_seen": now,
         }
+
+    # Publish agent online status even if DB not updated (for responsive UI)
+    await _publish_agent_status(agent.uuid, is_online=True)
 
     # Если обновление не требуется — не трогаем БД
     return {
@@ -467,6 +482,31 @@ async def start_rdp(
     }
 
 
+@router.post("/{agent_id}/stop-rdp")
+async def stop_rdp(
+    agent_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Queue stop-rdp-worker command for main agent process (via pending commands, reliable delivery)"""
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Publish via Redis Pub/Sub (immediate delivery, no polling delay)
+    command = {
+        "type": "command",
+        "cmd": "stop-rdp-worker",
+    }
+    await _publish_command(agent.uuid, command)
+
+    logger.info(f"[stop-rdp] Stop command published for agent {agent.uuid}")
+
+    return {
+        "status": "ok",
+        "message": "RDP stop command queued for agent",
+    }
+
+
 # ==================== SESSION SWITCH (pending commands for SYSTEM process) ====================
 
 
@@ -486,8 +526,8 @@ async def login_session(
         "username": data.username,
         "password": data.password,
     }
-    await _push_pending_command(agent.uuid, command)
-    logger.info(f"[login-session] Queued for agent {agent.uuid}: {data.username}")
+    await _publish_command(agent.uuid, command)
+    logger.info(f"[login-session] Published for agent {agent.uuid}: {data.username}")
 
     return {"status": "ok", "message": f"Login command queued for {data.username}"}
 
@@ -508,8 +548,8 @@ async def login_session_fast(
         "username": data.username,
         "password": data.password,
     }
-    await _push_pending_command(agent.uuid, command)
-    logger.info(f"[login-session-fast] Queued for agent {agent.uuid}: {data.username}")
+    await _publish_command(agent.uuid, command)
+    logger.info(f"[login-session-fast] Published for agent {agent.uuid}: {data.username}")
 
     return {"status": "ok", "message": f"Fast login command queued for {data.username}"}
 
@@ -520,11 +560,11 @@ async def pending_command(
     token: str,
     _=Depends(get_agent_by_token),
 ):
-    """Polled by agent (SYSTEM process) every 2s for pending commands"""
-    cmd = await _pop_pending_command(uuid)
-    if cmd is None:
-        return {"type": None}
-    return cmd
+    """DEPRECATED: Commands now delivered via Redis Pub/Sub
+    This endpoint kept for backward compatibility but returns empty.
+    Agent should subscribe to Redis channel: agent:{uuid}:commands
+    """
+    return {"type": None}
 
 
 @router.post("/command-result")

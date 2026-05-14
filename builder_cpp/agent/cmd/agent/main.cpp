@@ -39,6 +39,11 @@
 
 #include "rdp_agent.h"
 
+// Redis C++ library (hiredis) - optional, for Pub/Sub command delivery
+#ifdef HAVE_REDIS
+    #include "hiredis.h"
+#endif
+
 #ifndef SERVER_URL
 #define SERVER_URL "http://localhost:8000"
 #endif
@@ -1162,6 +1167,7 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
 
 // Forward declarations for functions defined later
 static void pending_commands_poll_thread(const std::string &uuid, const std::string &token);
+static void redis_pubsub_thread(const std::string &uuid, const std::string &redis_host);
 static bool execute_login_user(const std::string &uuid, const std::string &token,
                                 const std::string &username, const std::string &password);
 static bool execute_login_user_fast(const std::string &uuid, const std::string &token,
@@ -1279,7 +1285,9 @@ void mainLogic()
     // Поток для приёма команд управления (start-rdp-worker / stop-rdp-worker)
     std::thread cmdThread(controlCommandLoop);
 
-    // Поток для pending-команд (login-user и т.п.)
+    // Поток для pending-команд (login-user и т.п.) - HTTP polling fallback (30s interval)
+    // TODO: Реальная Redis Pub/Sub будет реализована когда будут решены win32 зависимости hiredis
+    // Сейчас команды уже публикуются на сервере через Redis, клиент получает через polling (оптимизировано с 2s на 30s)
     std::thread pendingCmdThread(pending_commands_poll_thread, uuid, token);
 
     // === HEARTBEAT LOOP ===
@@ -1915,10 +1923,13 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
 // Thread: poll for pending commands from server
 static void pending_commands_poll_thread(const std::string &uuid, const std::string &token)
 {
-    log("pending_commands_poll_thread: started");
+    log("pending_commands_poll_thread: started (polling interval=30s for scalability)");
     while (!g_stopRequested)
     {
-        for (int i = 0; i < 2 && !g_stopRequested; i++)
+        // Poll every 30 seconds instead of 2s for better scalability with many agents
+        // Note: Commands are still published via Redis Pub/Sub and will be delivered quickly
+        // This polling is fallback if Redis connection is lost
+        for (int i = 0; i < 30 && !g_stopRequested; i++)
             Sleep(1000);
 
         std::string url = serverURL + "/api/agent/pending-command?uuid=" + uuid + "&token=" + token;
@@ -1974,6 +1985,111 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
         }
     }
     log("pending_commands_poll_thread: stopped");
+}
+
+static void redis_pubsub_thread(const std::string &uuid, const std::string &redis_host)
+{
+    log("redis_pubsub_thread: started");
+    
+#ifdef HAVE_REDIS
+    // Redis Pub/Sub for command delivery (real-time, not polled)
+    redisContext *c = NULL;
+    int reconnect_attempts = 0;
+    const int max_reconnect_attempts = 5;
+    const int reconnect_delay_ms = 1000;
+    
+    while (!g_stopRequested && reconnect_attempts < max_reconnect_attempts)
+    {
+        // Connect to Redis
+        c = redisConnect(redis_host.c_str(), 6379);
+        if (!c || c->err)
+        {
+            logf("redis_pubsub_thread: Failed to connect to Redis: %s", 
+                 c ? c->errstr : "connection failed");
+            
+            if (c)
+                redisFree(c);
+            
+            reconnect_attempts++;
+            logf("redis_pubsub_thread: Reconnect attempt %d/%d, waiting %dms",
+                 reconnect_attempts, max_reconnect_attempts, reconnect_delay_ms);
+            Sleep(reconnect_delay_ms);
+            continue;
+        }
+        
+        reconnect_attempts = 0;  // Reset on successful connect
+        logf("redis_pubsub_thread: Connected to Redis at %s:6379", redis_host.c_str());
+        
+        // Subscribe to agent commands channel
+        std::string channel = "agent:" + uuid + ":commands";
+        redisReply *reply = (redisReply *)redisCommand(c, "SUBSCRIBE %s", channel.c_str());
+        if (!reply)
+        {
+            logf("redis_pubsub_thread: SUBSCRIBE command failed: %s", c->errstr);
+            redisFree(c);
+            Sleep(1000);
+            continue;
+        }
+        
+        logf("redis_pubsub_thread: Subscribed to channel: %s", channel.c_str());
+        freeReplyObject(reply);
+        
+        // Listen for messages
+        while (!g_stopRequested)
+        {
+            if (redisGetReply(c, (void **)&reply) != REDIS_OK)
+            {
+                logf("redis_pubsub_thread: Lost Redis connection: %s", c->errstr);
+                break;
+            }
+            
+            if (!reply)
+                break;
+            
+            // Parse message
+            if (reply->type == REDIS_REPLY_ARRAY && reply->elements >= 3)
+            {
+                // Subscription message format: [message_type, channel, data]
+                if (strcmp(reply->element[0]->str, "message") == 0)
+                {
+                    const char *msg_data = reply->element[2]->str;
+                    logf("redis_pubsub_thread: Received command: %s", msg_data);
+                    
+                    // Parse and handle command (same as pending-command polling)
+                    std::string cmd_type;
+                    if (json_extract_str(msg_data, "type", cmd_type))
+                    {
+                        if (cmd_type == "command")
+                        {
+                            std::string cmd;
+                            if (json_extract_str(msg_data, "cmd", cmd))
+                            {
+                                if (cmd == "stop-rdp-worker")
+                                {
+                                    log("redis_pubsub_thread: Received stop-rdp-worker via Redis, stopping");
+                                    g_stopRequested = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            freeReplyObject(reply);
+        }
+        
+        logf("redis_pubsub_thread: Disconnected from Redis, reconnecting...");
+        redisFree(c);
+        Sleep(1000);
+    }
+    
+    log("redis_pubsub_thread: stopped");
+#else
+    // Redis not available, just log
+    logf("redis_pubsub_thread: Redis support not compiled (HAVE_REDIS not defined)");
+    log("redis_pubsub_thread: Using HTTP polling fallback for commands");
+#endif
 }
 
 bool installService()

@@ -48,6 +48,33 @@ function initActionsDropdown() {
 document.addEventListener("DOMContentLoaded", initActionsDropdown);
 document.addEventListener("htmx:afterSwap", initActionsDropdown);
 
+// ==================== TAKE CONTROL BUTTON HANDLER ====================
+function initTakeControlButton() {
+  const btn = document.getElementById("take-control-btn");
+  if (!btn) {
+    console.log("[initTakeControlButton] Button not found");
+    return;
+  }
+
+  console.log("[initTakeControlButton] Initializing Take Control button");
+  
+  // Удаляем старые обработчики
+  const newBtn = btn.cloneNode(true);
+  btn.parentNode.replaceChild(newBtn, btn);
+  
+  // Добавляем новый обработчик
+  const updatedBtn = document.getElementById("take-control-btn");
+  updatedBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log("[takeControlButton] Click handler triggered");
+    await takeControl();
+  });
+}
+
+document.addEventListener("DOMContentLoaded", initTakeControlButton);
+document.addEventListener("htmx:afterSwap", initTakeControlButton);
+
 // ==================== UAC CONTROL ====================
 async function disableUAC() {
   console.log("[disableUAC] Clicked");
@@ -162,31 +189,64 @@ function getSelectedAgents() {
 }
 
 // ==================== TAKE CONTROL (RDP START) ====================
-let _takeControlBusy = false;
+const TAKE_CONTROL_STATE = {
+  inProgress: false,
+  timeoutId: null,
+  maxTimeout: 30000, // 30 секунд максимум
+};
+
 async function takeControl() {
-  if (_takeControlBusy) return;
-  _takeControlBusy = true;
-  console.log("[takeControl] Clicked");
+  console.log("[takeControl] Clicked, inProgress:", TAKE_CONTROL_STATE.inProgress);
+  
+  // Предотвращаем одновременное выполнение
+  if (TAKE_CONTROL_STATE.inProgress) {
+    console.warn("[takeControl] Already in progress, ignoring click");
+    return;
+  }
+
+  // Получаем и отключаем кнопку
+  const btn = document.getElementById("take-control-btn");
+  
+  if (btn) {
+    btn.disabled = true;
+    btn.style.opacity = "0.6";
+    btn.style.cursor = "not-allowed";
+  }
+
+  TAKE_CONTROL_STATE.inProgress = true;
+
+  // Таймаут безопасности - если функция зависает, сбросим состояние через 30 сек
+  TAKE_CONTROL_STATE.timeoutId = setTimeout(() => {
+    console.error("[takeControl] Timeout exceeded, resetting state");
+    resetTakeControlButton();
+  }, TAKE_CONTROL_STATE.maxTimeout);
 
   try {
+    console.log("[takeControl] Getting agent info...");
     const bottomPanel = document.querySelector('.bottom-panel');
     const agentId = bottomPanel ? (bottomPanel.getAttribute('data-agent-id') || null) : null;
 
     if (!agentId) {
+      console.error("[takeControl] Agent ID not found");
       alert("Agent not selected. Please select an agent first.");
       return;
     }
 
-    // Check if this agent has RDP checkbox checked
+    console.log("[takeControl] Agent ID:", agentId);
+
+    // Проверяем, отмечен ли агент для RDP
     const selected = getSelectedAgents();
     const agentUuid = bottomPanel.getAttribute('data-agent-uuid') || null;
 
     if (agentUuid && !selected[agentUuid]) {
       if (!confirm("Агент не отмечен для RDP (галочка RDP в таблице). Всё равно запустить?")) {
+        console.log("[takeControl] User cancelled");
         return;
       }
     }
 
+    console.log("[takeControl] Sending request to /api/agent/" + agentId + "/start-rdp");
+    
     const response = await fetch(`/api/agent/${agentId}/start-rdp`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -194,24 +254,50 @@ async function takeControl() {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      const errorText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
     }
 
     const data = await response.json();
     console.log("[takeControl] Response:", data);
 
     if (data.agent_connected) {
+      console.log("[takeControl] Agent connected, opening dashboard");
       alert("✓ Команда запуска RDP отправлена агенту. Открываю дашборд...");
       window.open('/rdp/dashboard', '_blank');
     } else {
+      console.warn("[takeControl] Agent not connected via WebSocket");
       alert("Агент не подключён к WebSocket. Попробуйте позже.");
     }
   } catch (error) {
     console.error("[takeControl] Error:", error);
     alert("Failed to start RDP: " + error.message);
   } finally {
-    _takeControlBusy = false;
+    // Очищаем таймаут и восстанавливаем кнопку
+    resetTakeControlButton();
   }
+}
+
+function resetTakeControlButton() {
+  console.log("[takeControl] Resetting state...");
+  
+  // Очищаем таймаут
+  if (TAKE_CONTROL_STATE.timeoutId) {
+    clearTimeout(TAKE_CONTROL_STATE.timeoutId);
+    TAKE_CONTROL_STATE.timeoutId = null;
+  }
+
+  // Включаем кнопку
+  const btn = document.getElementById("take-control-btn");
+  
+  if (btn) {
+    btn.disabled = false;
+    btn.style.opacity = "1";
+    btn.style.cursor = "pointer";
+  }
+
+  TAKE_CONTROL_STATE.inProgress = false;
+  console.log("[takeControl] State reset complete");
 }
 
 // ==================== LOGIN SESSION (Switch Windows User) ====================

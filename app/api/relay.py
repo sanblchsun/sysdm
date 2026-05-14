@@ -525,6 +525,22 @@ async def ws_control_viewer(ws: WebSocket, aid: str):
         s = HUB.viewer_ws.get(aid)
         if s is not None:
             s.discard(ws)
+        
+        # ===== Auto-stop RDP if no more viewers =====
+        remaining_viewers = HUB.viewer_ws.get(aid)
+        if not remaining_viewers or len(remaining_viewers) == 0:
+            logger.info(f"[relay] No more viewers for {aid}, sending stop-rdp-worker command")
+            agent_ws = HUB.agent_ws.get(aid)
+            if agent_ws:
+                try:
+                    stop_cmd = json.dumps({
+                        "type": "command",
+                        "cmd": "stop-rdp-worker",
+                    })
+                    await agent_ws.send_text(stop_cmd)
+                    logger.info(f"[relay] Sent stop-rdp-worker to {aid}")
+                except Exception as e:
+                    logger.error(f"[relay] Failed to send stop-rdp to {aid}: {e}")
 
 
 # ============ CONFIG ============
@@ -782,6 +798,42 @@ async def list_agents() -> AgentsListResponse:
         )
     logger.info(f"[relay] list_agents returning {len(out)} agents")
     return AgentsListResponse(agents=out)
+
+
+@router.websocket("/ws/agent-status-sync")
+async def ws_agent_status_sync(websocket: WebSocket):
+    """WebSocket for real-time agent online/offline status sync via Redis Pub/Sub
+    
+    Frontend connects to receive real-time status updates from agent heartbeats.
+    Server subscribes to Redis 'agent:status' channel and forwards updates to client.
+    """
+    await websocket.accept()
+    logger.info("[relay] Agent status sync WebSocket connected")
+    
+    r = await get_redis()
+    pubsub = r.pubsub()
+    try:
+        await pubsub.subscribe("agent:status")
+        logger.info("[relay] Subscribed to agent:status channel")
+        
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                try:
+                    # Forward agent status update to client
+                    data = message["data"]
+                    if isinstance(data, bytes):
+                        data = data.decode()
+                    await websocket.send_text(data)
+                except Exception as e:
+                    logger.warning(f"[relay] Failed to send status update: {e}")
+                    break
+    except WebSocketDisconnect:
+        logger.info("[relay] Agent status sync WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"[relay] Agent status sync error: {e}")
+    finally:
+        await pubsub.unsubscribe("agent:status")
+        await pubsub.close()
 
 
 @router.get("/healthz")

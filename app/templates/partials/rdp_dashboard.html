@@ -401,6 +401,38 @@
       }
       refresh();
       setInterval(refresh, 2000);
+
+      // ========= CLEANUP ON PAGE CLOSE =========
+      // When dashboard is closed, stop all active RDP streams
+      let cleanupDone = false;
+
+      async function stopAllRDPStreams() {
+        if (cleanupDone) return;
+        cleanupDone = true;
+
+        console.log("[dashboard] Stopping all RDP streams...");
+
+        const selected = getSelectedAgents();
+        for (const agentId of Object.keys(selected)) {
+          try {
+            console.log("[dashboard] Sending stop-rdp-worker to", agentId);
+            const response = await fetch(`/api/agent/${agentId}/stop-rdp`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+            });
+            if (response.ok) {
+              console.log("[dashboard] Stop sent to", agentId);
+            }
+          } catch (e) {
+            console.error("[dashboard] Failed to stop", agentId, e);
+          }
+        }
+      }
+
+      // Handle page unload/close
+      window.addEventListener("beforeunload", stopAllRDPStreams, { once: true });
+      window.addEventListener("unload", stopAllRDPStreams, { once: true });
     </script>
   </body>
 </html>
