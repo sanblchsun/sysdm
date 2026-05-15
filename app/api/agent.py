@@ -240,9 +240,14 @@ async def agent_heartbeat(
     session: AsyncSession = Depends(get_db),
 ):
     now = datetime.now(timezone.utc)
+    
+    # Handle both offset-aware and offset-naive datetimes from database
+    last_seen = agent.last_seen
+    if last_seen and last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
 
     # Обновляем last_seen не чаще чем раз в UPDATE_INTERVAL секунд
-    if not agent.last_seen or now - agent.last_seen > UPDATE_INTERVAL:
+    if not agent.last_seen or now - last_seen > UPDATE_INTERVAL:
         await session.execute(
             update(Agent).where(Agent.id == agent.id).values(last_seen=now)
         )

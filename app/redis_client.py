@@ -24,8 +24,6 @@ async def get_redis() -> aioredis.Redis:
                             f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
                             decode_responses=True,
                             socket_connect_timeout=5,
-                            socket_keepalive=True,
-                            socket_keepalive_inactivity_timeout=5,
                         )
                         await redis_client.ping()
                         logger.info("[redis] Connected successfully")
@@ -34,11 +32,11 @@ async def get_redis() -> aioredis.Redis:
                         logger.warning(f"[redis] Connection attempt {attempt}/{max_retries} failed: {e}")
                         if attempt >= max_retries:
                             logger.error(f"[redis] Failed to connect after {max_retries} attempts: {e}")
-                            redis_client = None
                             raise
                         # Exponential backoff: 1s, 2s, 4s (min 1, max 10)
                         await asyncio.sleep(min(retry_delay, 10))
                         retry_delay *= 2
+    assert redis_client is not None, "Redis client should be initialized"
     return redis_client
 
 

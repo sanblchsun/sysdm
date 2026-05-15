@@ -49,8 +49,9 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL_SCRIPT(self):
-        # URL базы данных для запуска скриптов (используется локальный хост)
-        return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST_SCRIPT}:5432/{self.DB_NAME}"
+        # URL базы данных для запуска alembic скриптов (sync драйвер)
+        # Используется ТОЛЬКО для создания миграций, не для приложения
+        return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST_SCRIPT}:5432/{self.DB_NAME}"
 
     model_config = SettingsConfigDict(env_file=".env")
 

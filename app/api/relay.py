@@ -167,6 +167,8 @@ class AgentState:
         "h264_keyframe_buffer",
         "h264_subscribers",
         "h264_count",
+        "h264_total_count",
+        "mjpeg_total_count",
         "updated",
         "started",
         "_last_redis_sync",
@@ -192,6 +194,8 @@ class AgentState:
         self.h264_keyframe_buffer = bytearray()
         self.h264_subscribers: Set[asyncio.Queue] = set()
         self.h264_count: int = 0
+        self.h264_total_count: int = 0  # Cumulative keyframe counter (only grows)
+        self.mjpeg_total_count: int = 0  # Cumulative MJPEG frame counter (only grows)
 
         self.updated: float = 0.0
         self.started: float = time.time()
@@ -245,6 +249,7 @@ class AgentState:
 
     def push_mjpeg(self, frame: bytes):
         self.updated = time.time()
+        self.mjpeg_total_count += 1  # Increment cumulative counter
         if self.mjpeg_queue.full():
             try:
                 self.mjpeg_queue.get_nowait()
@@ -266,6 +271,7 @@ class AgentState:
         if idr_off >= 0:
             self.h264_keyframe_buffer = bytearray(chunk[idr_off:])
             self.h264_count += 1
+            self.h264_total_count += 1  # Increment cumulative counter
         else:
             self.h264_keyframe_buffer.extend(chunk)
             if len(self.h264_keyframe_buffer) > 32 * 1024 * 1024:
@@ -851,8 +857,8 @@ async def list_agents() -> AgentsListResponse:
                 alive=alive,
                 elapsed=round(elapsed, 1),
                 uptime_s=round(now - a.started, 1),
-                mjpeg_frames=a.mjpeg_queue.qsize(),
-                h264_keyframes=a.h264_count,
+                mjpeg_frames=a.mjpeg_total_count,
+                h264_keyframes=a.h264_total_count,
                 h264_viewers=len(a.h264_subscribers),
                 ctrl_connected=ctrl_any,
                 target={

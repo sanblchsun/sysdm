@@ -1,5 +1,5 @@
 # app/api/pages.py
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request, Query, Depends
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -103,9 +103,13 @@ async def top_panel(
 
     result = await session.execute(stmt)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for row in result.all():
-        is_online = row.last_seen is not None and (now - row.last_seen) < OFFLINE_AFTER
+        # Обработать offset-naive datetimes из БД
+        last_seen = row.last_seen
+        if last_seen and last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        is_online = last_seen is not None and (now - last_seen) < OFFLINE_AFTER
 
         agents.append(
             {
@@ -182,11 +186,14 @@ async def agents_status(
 
     stmt = select(Agent.id, Agent.last_seen).where(*conditions)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     result = await session.execute(stmt)
 
     agents = {}
     for agent_id, last_seen in result.all():
+        # Обработать offset-naive datetimes из БД
+        if last_seen and last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
         agents[agent_id] = {
             "online": bool(last_seen and (now - last_seen) < OFFLINE_AFTER)
         }
