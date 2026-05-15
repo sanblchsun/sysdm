@@ -185,7 +185,10 @@ async def register_agent(
     # -------------------------
     # 4. Обновляем additional_data
     # -------------------------
-    additional = await session.get(AgentAdditionalData, agent.id)
+    result = await session.execute(
+        select(AgentAdditionalData).where(AgentAdditionalData.agent_id == agent.id)
+    )
+    additional = result.scalars().first()
     if not additional:
         additional = AgentAdditionalData(agent_id=agent.id)
         session.add(additional)
@@ -210,7 +213,10 @@ async def agent_telemetry(
     session: AsyncSession = Depends(get_db),
 ):
     # Обновляем AgentAdditionalData
-    additional = await session.get(AgentAdditionalData, agent.id)
+    result = await session.execute(
+        select(AgentAdditionalData).where(AgentAdditionalData.agent_id == agent.id)
+    )
+    additional = result.scalars().first()
     if not additional:
         additional = AgentAdditionalData(agent_id=agent.id)
         session.add(additional)
@@ -608,12 +614,13 @@ async def login_session(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     command = {
-        "type": "login-user",
+        "type": "command",
+        "cmd": "login-user",
         "username": data.username,
         "password": data.password,
     }
-    await _publish_command(agent.uuid, command)
-    logger.info(f"[login-session] Published for agent {agent.uuid}: {data.username}")
+    await send_command_to_agent(agent.uuid, command)
+    logger.info(f"[login-session] Command sent to agent {agent.uuid}: {data.username}")
 
     return {"status": "ok", "message": f"Login command queued for {data.username}"}
 
@@ -630,11 +637,12 @@ async def login_session_fast(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     command = {
-        "type": "login-user-fast",
+        "type": "command",
+        "cmd": "login-user-fast",
         "username": data.username,
         "password": data.password,
     }
-    await _publish_command(agent.uuid, command)
+    await send_command_to_agent(agent.uuid, command)
     logger.info(f"[login-session-fast] Published for agent {agent.uuid}: {data.username}")
 
     return {"status": "ok", "message": f"Fast login command queued for {data.username}"}

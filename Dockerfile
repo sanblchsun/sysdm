@@ -9,7 +9,7 @@ FROM python:3.13.13-slim as builder
 WORKDIR /build
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --fix-missing --no-install-recommends \
     gcc \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*

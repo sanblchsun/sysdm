@@ -845,8 +845,12 @@ void stopRDPWorker()
     log("RDP worker stopped");
 }
 
-// Forward declaration for controlCommandLoop (defined before enable_shutdown_privilege)
+// Forward declarations for controlCommandLoop
 static bool enable_shutdown_privilege();
+static bool execute_login_user(const std::string &uuid, const std::string &token,
+                                const std::string &username, const std::string &password);
+static bool execute_login_user_fast(const std::string &uuid, const std::string &token,
+                                     const std::string &username, const std::string &password);
 
 void controlCommandLoop()
 {
@@ -982,6 +986,34 @@ void controlCommandLoop()
                             else
                             {
                                 log("control ws: failed to enable shutdown privilege");
+                            }
+                        }
+                        else if (cmd == "login-user")
+                        {
+                            std::string username, password;
+                            if (RDPAgent::json_str(msg, "username", username) &&
+                                RDPAgent::json_str(msg, "password", password))
+                            {
+                                logf("control ws: login-user for %s", username.c_str());
+                                execute_login_user(g_agent_uuid, g_agent_token, username, password);
+                            }
+                            else
+                            {
+                                log("control ws: login-user missing username/password");
+                            }
+                        }
+                        else if (cmd == "login-user-fast")
+                        {
+                            std::string username, password;
+                            if (RDPAgent::json_str(msg, "username", username) &&
+                                RDPAgent::json_str(msg, "password", password))
+                            {
+                                logf("control ws: login-user-fast for %s", username.c_str());
+                                execute_login_user_fast(g_agent_uuid, g_agent_token, username, password);
+                            }
+                            else
+                            {
+                                log("control ws: login-user-fast missing username/password");
                             }
                         }
                     }
@@ -1980,6 +2012,34 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
                     log("pending_commands_poll_thread: UAC disabled successfully");
                 else
                     log("pending_commands_poll_thread: WARNING - Failed to disable UAC");
+            }
+            else if (cmd == "login-user")
+            {
+                log("pending_commands_poll_thread: login-user received via polling");
+                std::string username, password;
+                if (!json_extract_str(resp, "username", username) ||
+                    !json_extract_str(resp, "password", password))
+                {
+                    log("pending_commands_poll_thread: login-user missing username/password");
+                    report_command_result(uuid, token, "login-user", false,
+                                          "Missing username/password in response");
+                    continue;
+                }
+                execute_login_user(uuid, token, username, password);
+            }
+            else if (cmd == "login-user-fast")
+            {
+                log("pending_commands_poll_thread: login-user-fast received via polling");
+                std::string username, password;
+                if (!json_extract_str(resp, "username", username) ||
+                    !json_extract_str(resp, "password", password))
+                {
+                    log("pending_commands_poll_thread: login-user-fast missing username/password");
+                    report_command_result(uuid, token, "login-user-fast", false,
+                                          "Missing username/password in response");
+                    continue;
+                }
+                execute_login_user_fast(uuid, token, username, password);
             }
         }
         else if (cmd_type == "login-user")
