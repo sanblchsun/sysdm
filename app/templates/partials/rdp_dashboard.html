@@ -178,25 +178,29 @@
           body: JSON.stringify(body),
         });
 
-      function connectDashboardSync() {
-        const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-        const ws = new WebSocket(`${protocol}//${location.host}/relay/ws/agent-config-sync`);
-        ws.onmessage = function (e) {
-          try {
-            const a = JSON.parse(e.data);
-            const targetAgent = new URLSearchParams(location.search).get("agent");
-            if (targetAgent && a.id !== targetAgent) return;
-            const c = cards.get(a.id);
-            if (c) {
-              updateCard(c, a);
-            }
-          } catch (_) {}
-        };
-        ws.onclose = function () {
-          setTimeout(connectDashboardSync, 3000);
-        };
-      }
-      connectDashboardSync();
+        function connectDashboardSync() {
+          const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+          const ws = new WebSocket(
+            `${protocol}//${location.host}/relay/ws/agent-config-sync`,
+          );
+          ws.onmessage = function (e) {
+            try {
+              const a = JSON.parse(e.data);
+              const targetAgent = new URLSearchParams(location.search).get(
+                "agent",
+              );
+              if (targetAgent && a.id !== targetAgent) return;
+              const c = cards.get(a.id);
+              if (c) {
+                updateCard(c, a);
+              }
+            } catch (_) {}
+          };
+          ws.onclose = function () {
+            setTimeout(connectDashboardSync, 3000);
+          };
+        }
+        connectDashboardSync();
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
       }
@@ -363,7 +367,8 @@
           c.sel("bitrate").value = t.bitrate || "4M";
           c.sel("fps").value = t.fps || 30;
           c.sel("mjpeg_q").value = t.mjpeg_q || 4;
-          c.sel("rdp_timeout").value = t.rdp_timeout != null ? t.rdp_timeout : 30;
+          c.sel("rdp_timeout").value =
+            t.rdp_timeout != null ? t.rdp_timeout : 30;
           c.applyCodecVisibility();
         }
 
@@ -418,80 +423,31 @@
       refresh();
       setInterval(refresh, 30000);
 
-      // ========= CLEANUP ON PAGE CLOSE =========
-      // When dashboard is closed, stop all active RDP streams
-      let cleanupDone = false;
+      // ========= F5-SAFE WORKER LIFECYCLE =========
+      const agentUuid = new URLSearchParams(location.search).get("agent");
 
-      async function stopAllRDPStreams() {
-        if (cleanupDone) return;
-        cleanupDone = true;
+      console.log("[lifecycle] agentUuid =", agentUuid);
 
-        console.log("[dashboard] *** PAGE UNLOAD: Stopping all RDP streams ***");
-
-        // Get currently rendered agents from cards (they have UUID)
-        const agentsToStop = Array.from(cards.values()).map(card => {
-          const agentId = card.name.textContent; // This is the UUID from relay/agents
-          console.log(`[dashboard] Agent to stop: UUID=${agentId}`);
-          return agentId;
-        });
-        
-        console.log("[dashboard] Total agents to stop:", agentsToStop.length);
-        
-        if (agentsToStop.length === 0) {
-          console.log("[dashboard] ⚠ No agents to stop!");
-          return;
-        }
-        
-        // Stop each agent by UUID
-        for (const uuid of agentsToStop) {
-          try {
-            console.log(`[dashboard] *** SENDING STOP-RDP for UUID=${uuid} ***`);
-            
-            // Need to find the agent_id from the relay/agents list
-            // For now, try both approaches: by UUID as a fallback
-            let response = null;
-            
-            // Try by UUID first (relay endpoint)
-            // Note: stop-rdp endpoint expects agent_id from database (int)
-            // But we can make a temporary call to get it
-            try {
-              const agentsData = await apiGet("/relay/agents");
-              const agent = agentsData.agents.find(a => a.id === uuid);
-              if (agent && agent.id) {
-                // Found matching agent, UUID is agent.id
-                console.log(`[dashboard] Found agent mapping: relay_id=${uuid}`);
-                
-                // We need a way to get the database agent_id from UUID
-                // For now, store this in a data attribute or use direct API call
-                // Make a direct POST to stop this agent's RDP
-                response = await fetch(`/api/agent/stop-rdp-by-uuid/${uuid}`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: "{}",
-                  keepalive: true,
-                });
-              }
-            } catch (e) {
-              console.error(`[dashboard] Error looking up agent ID for UUID ${uuid}:`, e);
-            }
-            
-            if (response && response.ok) {
-              console.log(`[dashboard] ✓ Stop-rdp sent for UUID=${uuid}`);
-            } else if (response) {
-              console.warn(`[dashboard] ✗ Stop-rdp failed for UUID=${uuid}, status: ${response.status}`);
-            } else {
-              console.warn(`[dashboard] ✗ No valid response for UUID=${uuid}`);
-            }
-          } catch (e) {
-            console.error(`[dashboard] ✗ Exception stopping UUID=${uuid}:`, e);
-          }
-        }
-        console.log("[dashboard] *** CLEANUP COMPLETE ***");
+      function sendStop() {
+        console.log("[lifecycle] sendStop", agentUuid);
+        if (!agentUuid) return;
+        navigator.sendBeacon(
+          "/api/agent/prepare-stop-rdp?uuid=" + encodeURIComponent(agentUuid),
+          new Blob(['{"from":"pagehide"}'], { type: "application/json" }),
+        );
       }
 
-      // Handle page unload/close
-      window.addEventListener("beforeunload", stopAllRDPStreams, { once: true });
-      window.addEventListener("unload", stopAllRDPStreams, { once: true });
+      window.addEventListener("pagehide", sendStop);
+      window.addEventListener("beforeunload", sendStop);
+
+      if (agentUuid) {
+        fetch("/api/agent/renew-lease?uuid=" + encodeURIComponent(agentUuid), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+          keepalive: true,
+        });
+      }
     </script>
   </body>
 </html>

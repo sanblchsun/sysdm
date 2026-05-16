@@ -507,6 +507,71 @@ async def stop_rdp_by_uuid(
     }
 
 
+# ==================== DEBOUNCED STOP-RDP (F5-safe) ====================
+import asyncio
+
+_pending_deadlines: dict[str, datetime] = {}  # uuid → deadline for pending stop
+_last_page_load: dict[str, datetime] = {}     # uuid → time of last renew-lease
+_last_prepare: dict[str, datetime] = {}       # uuid → time of last prepare-stop-rdp
+
+
+async def _watchdog(uuid: str) -> None:
+    """Sleep until deadline passes. Check if page reloaded since last prepare."""
+    while True:
+        deadline = _pending_deadlines.get(uuid)
+        if not deadline:
+            return
+        remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(remaining)
+    _pending_deadlines.pop(uuid, None)
+    last_page_load = _last_page_load.get(uuid)
+    last_prepare = _last_prepare.get(uuid)
+    _last_page_load.pop(uuid, None)
+    _last_prepare.pop(uuid, None)
+    # If page loaded AFTER the last prepare → it was F5, keep alive
+    if last_page_load and last_prepare and last_page_load > last_prepare:
+        return
+    # Page is gone, stop the worker
+    command = {"type": "command", "cmd": "stop-rdp-worker"}
+    await _publish_command(uuid, command)
+    r = await get_redis()
+    pending_key = f"pending_cmd:{uuid}"
+    await r.rpush(pending_key, json.dumps(command))  # type: ignore[misc]
+    await r.expire(pending_key, 600)  # type: ignore[misc]
+
+
+@router.post("/prepare-stop-rdp")
+async def prepare_stop_rdp(uuid: str):
+    """Schedule or extend stop-rdp timer (3s from this call)."""
+    logger.info(f"[prepare-stop-rdp] RECEIVED uuid={uuid}")
+    now = datetime.now(timezone.utc)
+    first = uuid not in _pending_deadlines
+    if first:
+        _last_prepare[uuid] = now  # record only the FIRST unload
+    _pending_deadlines[uuid] = now + timedelta(seconds=3)
+    if first:
+        asyncio.create_task(_watchdog(uuid))
+    return {"status": "ok"}
+
+
+@router.post("/renew-lease")
+async def renew_lease(uuid: str):
+    """Called on every page load. Newer timestamp means F5, not tab close."""
+    logger.info(f"[renew-lease] RECEIVED uuid={uuid}")
+    _last_page_load[uuid] = datetime.now(timezone.utc)
+    return {"status": "ok"}
+
+
+@router.post("/renew-lease")
+async def renew_lease(uuid: str):
+    """Renew page lease (called on every page load). Lease lasts 15s."""
+    logger.info(f"[renew-lease] RECEIVED uuid={uuid}")
+    _page_leases[uuid] = datetime.now(timezone.utc) + timedelta(seconds=15)
+    return {"status": "ok"}
+
+
 # ==================== SESSION SWITCH (pending commands for SYSTEM process) ====================
 
 

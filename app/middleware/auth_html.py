@@ -1,4 +1,3 @@
-from datetime import timedelta
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import Request
 from fastapi.responses import RedirectResponse
@@ -26,7 +25,7 @@ class AuthHTMLMiddleware(BaseHTTPMiddleware):
             with contextlib.suppress(AuthXException, Exception):
                 token = await auth.get_access_token_from_request(request)
                 payload = auth.verify_token(token, verify_csrf=False)
-                if timedelta(payload.time_until_expiry) < auth_config.JWT_IMPLICIT_REFRESH_DELTATIME:
+                if payload.time_until_expiry < auth_config.JWT_IMPLICIT_REFRESH_DELTATIME:
                     new_token = auth.create_access_token(uid=payload.sub, fresh=False)
                     response = await call_next(request)
                     auth.set_access_cookies(new_token, response)
