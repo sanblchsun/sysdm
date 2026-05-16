@@ -364,8 +364,11 @@
           return;
         }
 
-        // Показываем только живых агентов
-        const filteredAgents = data.agents.filter((a) => a.alive);
+        // Показываем только живых агентов (или одного конкретного, если передан ?agent=)
+        const targetAgent = new URLSearchParams(location.search).get("agent");
+        const filteredAgents = targetAgent
+          ? data.agents.filter((a) => a.id === targetAgent && a.alive)
+          : data.agents.filter((a) => a.alive);
 
         const grid = filteredAgents.length ? ensureGrid() : null;
         const ids = new Set(filteredAgents.map((a) => a.id));

@@ -247,7 +247,9 @@ async function takeControl() {
     if (data.agent_connected) {
       console.log("[takeControl] Agent connected, opening dashboard");
       alert("✓ Команда запуска RDP отправлена агенту. Открываю дашборд...");
-      window.open('/rdp/dashboard', '_blank');
+      const agentUuid = bottomPanel.getAttribute('data-agent-uuid') || '';
+      const url = agentUuid ? `/rdp/dashboard?agent=${encodeURIComponent(agentUuid)}` : '/rdp/dashboard';
+      window.open(url, '_blank');
     } else {
       console.warn("[takeControl] Agent not connected via WebSocket");
       alert("Агент не подключён к WebSocket. Попробуйте позже.");
