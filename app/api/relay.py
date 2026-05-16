@@ -592,7 +592,15 @@ async def ws_control_viewer(ws: WebSocket, aid: str):
                 # Mouse/keyboard/clipboard go to WORKER
                 if msg_type in ("mouse_move", "mouse_down", "mouse_up", "mouse_wheel", 
                                "text", "key_down", "key_up", "clipboard"):
-                    await PS_MANAGER.publish(f"ctrl:worker:{aid}", msg)
+                    # Direct relay if worker is on the same server — avoids Redis PubSub latency
+                    ws_worker = HUB.worker_ws.get(aid)
+                    if ws_worker is not None:
+                        try:
+                            await ws_worker.send_text(msg)
+                        except Exception:
+                            await PS_MANAGER.publish(f"ctrl:worker:{aid}", msg)
+                    else:
+                        await PS_MANAGER.publish(f"ctrl:worker:{aid}", msg)
                 # Commands (stop-rdp, disable-uac, etc) go to MAIN
                 elif msg_type == "command":
                     await PS_MANAGER.publish(f"ctrl:to:{aid}", msg)
