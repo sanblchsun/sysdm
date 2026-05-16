@@ -182,12 +182,6 @@ async function rebootAgent() {
   closeActionsMenu();
 }
 
-// Load selected agents from localStorage
-function getSelectedAgents() {
-  const data = localStorage.getItem("rdp_selected_agents");
-  return data ? JSON.parse(data) : {};
-}
-
 // ==================== TAKE CONTROL (RDP START) ====================
 const TAKE_CONTROL_STATE = {
   inProgress: false,
@@ -233,17 +227,6 @@ async function takeControl() {
     }
 
     console.log("[takeControl] Agent ID:", agentId);
-
-    // Проверяем, отмечен ли агент для RDP
-    const selected = getSelectedAgents();
-    const agentUuid = bottomPanel.getAttribute('data-agent-uuid') || null;
-
-    if (agentUuid && !selected[agentUuid]) {
-      if (!confirm("Агент не отмечен для RDP (галочка RDP в таблице). Всё равно запустить?")) {
-        console.log("[takeControl] User cancelled");
-        return;
-      }
-    }
 
     console.log("[takeControl] Sending request to /api/agent/" + agentId + "/start-rdp");
     

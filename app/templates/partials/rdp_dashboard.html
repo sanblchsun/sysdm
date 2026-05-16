@@ -166,12 +166,6 @@
     </div>
 
     <script>
-      // Загрузить список выбранных агентов из localStorage
-      function getSelectedAgents() {
-        const data = localStorage.getItem("rdp_selected_agents");
-        return data ? JSON.parse(data) : {};
-      }
-
       const cards = new Map();
 
       async function apiGet(u) {
@@ -370,9 +364,8 @@
           return;
         }
 
-        // Фильтруем агентов по выбранным в таблице и только живых
-        const selected = getSelectedAgents();
-        const filteredAgents = data.agents.filter((a) => selected[a.id] && a.alive);
+        // Показываем только живых агентов
+        const filteredAgents = data.agents.filter((a) => a.alive);
 
         const grid = filteredAgents.length ? ensureGrid() : null;
         const ids = new Set(filteredAgents.map((a) => a.id));
@@ -385,7 +378,7 @@
         if (!filteredAgents.length) {
           if (!document.getElementById("empty")) {
             document.getElementById("root").innerHTML =
-              '<div class="empty" id="empty">Выберите агентов в таблице для просмотра (галочка RDP).</div>';
+              '<div class="empty" id="empty">Нет подключённых агентов.</div>';
           }
           return;
         }
