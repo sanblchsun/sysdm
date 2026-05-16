@@ -628,60 +628,34 @@ static HANDLE GetActiveUserToken()
     DWORD sessionId = WTSGetActiveConsoleSessionId();
     if (sessionId == 0xFFFFFFFF)
     {
-        log("No active console session");
         return NULL;
     }
 
     HANDLE hUser = NULL;
     if (!WTSQueryUserToken(sessionId, &hUser))
     {
-        logf("WTSQueryUserToken failed: %lu", GetLastError());
         return NULL;
     }
 
-    // --- UAC: пытаемся получить elevated-версию токена ---
     DWORD sz = 0;
     TOKEN_ELEVATION_TYPE et = TokenElevationTypeDefault;
     if (GetTokenInformation(hUser, TokenElevationType, &et, sizeof(et), &sz))
     {
-        const char *etName =
-            (et == TokenElevationTypeDefault) ? "Default (no split)" : (et == TokenElevationTypeFull)  ? "Full (already elevated)"
-                                                                   : (et == TokenElevationTypeLimited) ? "Limited (filtered)"
-                                                                                                       : "Unknown";
-        logf("Active-user token elevation type: %d (%s)", (int)et, etName);
-
         if (et == TokenElevationTypeLimited)
         {
-            // У админа есть «парный» полный токен — берём его.
             TOKEN_LINKED_TOKEN lt = {0};
             if (GetTokenInformation(hUser, TokenLinkedToken, &lt, sizeof(lt), &sz))
             {
-                log("Switched to linked (elevated) token for High IL worker");
                 CloseHandle(hUser);
-                hUser = lt.LinkedToken; // impersonation token
-            }
-            else
-            {
-                DWORD err = GetLastError();
-                logf("GetTokenInformation(TokenLinkedToken) failed: %lu "
-                     "(standard user? UAC off?) — continuing with filtered token",
-                     err);
-                // Это значит пользователь не админ. Оставляем filtered — будет Medium IL.
-                // Admin-окна всё равно не дадутся, но остальное будет работать.
+                hUser = lt.LinkedToken;
             }
         }
     }
-    else
-    {
-        logf("GetTokenInformation(TokenElevationType) failed: %lu", GetLastError());
-    }
 
-    // Для CreateProcessAsUser нужен primary-токен.
     HANDLE hPrimary = NULL;
     if (!DuplicateTokenEx(hUser, MAXIMUM_ALLOWED, NULL,
                           SecurityImpersonation, TokenPrimary, &hPrimary))
     {
-        logf("DuplicateTokenEx failed: %lu", GetLastError());
         CloseHandle(hUser);
         return NULL;
     }
@@ -726,11 +700,7 @@ bool spawnRDPWorker()
                 g_shm->last_activity_time = GetTickCount64();
                 g_shm->timeout_min = 30;
             }
-            else
-                log("MapViewOfFile failed for activity shm");
         }
-        else
-            log("CreateFileMapping failed for activity shm");
     }
 
     std::string selfPath = getExePath();
@@ -793,12 +763,10 @@ bool spawnRDPWorker()
 
     if (!ok)
     {
-        logf("CreateProcessAsUser failed: %lu — cmd=%s", err, cmdline.c_str());
         return false;
     }
 
     g_rdp_worker_pi = pi;
-    logf("RDP worker spawned, PID=%lu, cmd=%s", pi.dwProcessId, cmdline.c_str());
     return true;
 }
 
@@ -872,7 +840,6 @@ void controlCommandLoop()
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
     {
-        log("control loop: WSAStartup failed");
         return;
     }
 
@@ -888,14 +855,12 @@ void controlCommandLoop()
                 DWORD ec = 0;
                 if (GetExitCodeProcess(g_rdp_worker_pi.hProcess, &ec) && ec != STILL_ACTIVE)
                 {
-                    logf("RDP worker exited, code=%lu — cleaning up", ec);
                     CloseHandle(g_rdp_worker_pi.hProcess);
                     CloseHandle(g_rdp_worker_pi.hThread);
                     g_rdp_worker_pi = {0};
                 }
                 else
                 {
-                    // Worker is running — проверяем таймаут неактивности
                     if (g_shm)
                     {
                         int to = g_shm->timeout_min;
@@ -908,8 +873,6 @@ void controlCommandLoop()
                                 LONG64 idle_sec = (now - last) / 1000;
                                 if (idle_sec >= to * 60)
                                 {
-                                    logf("Inactivity timeout: %llds idle (limit %dmin) — stopping worker",
-                                         (long long)idle_sec, to);
                                     need_stop = true;
                                 }
                             }
@@ -941,7 +904,6 @@ void controlCommandLoop()
         std::string ws_path = path_prefix + g_agent_uuid;
         if (!RDPAgent::ws_handshake(c, g_rdp_server_host, g_rdp_server_port, ws_path))
         {
-            log("control WS handshake failed");
             RDPAgent::tls_close(c);
             delete c;
             std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -966,7 +928,6 @@ void controlCommandLoop()
                     std::string cmd;
                     if (RDPAgent::json_str(msg, "cmd", cmd))
                     {
-                        logf("control ws: received command: %s", cmd.c_str());
                         if (cmd == "start-rdp-worker")
                         {
                             int timeout = 0;
@@ -977,37 +938,23 @@ void controlCommandLoop()
                             RDPAgent::json_str(msg, "bitrate", g_rdp_worker_bitrate);
                             RDPAgent::json_int(msg, "fps", g_rdp_worker_fps);
                             RDPAgent::json_int(msg, "mjpeg_q", g_rdp_worker_mjpeg_q);
-                            logf("control ws: starting RDP worker, timeout=%d codec=%s encoder=%s bitrate=%s fps=%d mjpeg_q=%d",
-                                 timeout, g_rdp_worker_codec.c_str(), g_rdp_worker_encoder.c_str(),
-                                 g_rdp_worker_bitrate.c_str(), g_rdp_worker_fps, g_rdp_worker_mjpeg_q);
                             spawnRDPWorker();
                         }
                         else if (cmd == "stop-rdp-worker")
                         {
-                            log("control ws: stopping RDP worker");
                             stopRDPWorker();
                         }
                         else if (cmd == "disable-uac")
                         {
-                            log("control ws: executing disable_uac() from main process");
-                            if (disable_uac())
-                                log("control ws: UAC disabled successfully");
-                            else
-                                log("control ws: WARNING - Failed to disable UAC");
+                            disable_uac();
                         }
                         else if (cmd == "reboot")
                         {
-                            log("control ws: reboot requested");
                             if (enable_shutdown_privilege())
                             {
-                                log("control ws: rebooting system now");
                                 ExitWindowsEx(EWX_REBOOT | EWX_FORCE,
                                               SHTDN_REASON_MAJOR_OPERATINGSYSTEM |
                                               SHTDN_REASON_MINOR_RECONFIG);
-                            }
-                            else
-                            {
-                                log("control ws: failed to enable shutdown privilege");
                             }
                         }
                         else if (cmd == "login-user")
@@ -1016,28 +963,16 @@ void controlCommandLoop()
                             if (RDPAgent::json_str(msg, "username", username) &&
                                 RDPAgent::json_str(msg, "password", password))
                             {
-                                logf("control ws: login-user for %s", username.c_str());
                                 execute_login_user(g_agent_uuid, g_agent_token, username, password);
-                            }
-                            else
-                            {
-                                log("control ws: login-user missing username/password");
                             }
                         }
                         else if (cmd == "login-user-fast")
                         {
                             std::string username, password;
-                            log("control ws: login-user-fast запрос у агента");
                             if (RDPAgent::json_str(msg, "username", username) &&
                                 RDPAgent::json_str(msg, "password", password))
                             {
-                                logf("control ws: login-user-fast for %s", username.c_str());
-                                logf("control ws: login-user-fast for %s", password.c_str());
                                 execute_login_user_fast(g_agent_uuid, g_agent_token, username, password);
-                            }
-                            else
-                            {
-                                log("control ws: login-user-fast нет в запросе username/password");
                             }
                         }
                     }
@@ -1047,7 +982,6 @@ void controlCommandLoop()
 
         RDPAgent::tls_close(c);
         delete c;
-        log("control WS disconnected, reconnecting...");
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
 
@@ -1067,8 +1001,6 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
         return;
     if (responseBody.find("\"update\":true") == std::string::npos)
         return;
-
-    logf("New version available: %s", responseBody.c_str());
     std::string newBuild, downloadUrl, sha256;
     size_t buildPos = responseBody.find("\"build\":\"");
     size_t urlPos = responseBody.find("\"url\":\"");
@@ -1090,11 +1022,9 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
     }
     if (newBuild.empty() || downloadUrl.empty())
     {
-        log("Invalid update response");
         return;
     }
 
-    logf("Updating to %s, URL=%s, SHA=%s", newBuild.c_str(), downloadUrl.c_str(), sha256.c_str());
     if (g_stopRequested)
         return;
 
@@ -1167,7 +1097,6 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
     std::string hash = sha256File(tmpPath);
     if (hash.empty() || hash != sha256)
     {
-        logf("SHA256 mismatch (expected %s, got %s)", sha256.c_str(), hash.c_str());
         DeleteFileA(tmpPath.c_str());
         return;
     }
@@ -1181,8 +1110,6 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
     {
         if (MoveFileA(tmpPath.c_str(), exePath.c_str()))
         {
-            log("Update successful, restarting service...");
-
             std::string telemetryBody = "{\"exe_version\":\"" + newBuild + "\"}";
             std::string dummy;
             int code;
@@ -1201,7 +1128,6 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
             {
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
-                log("Scheduled service restart in 2 seconds");
             }
             Sleep(3000);
             ExitProcess(0);
@@ -1209,13 +1135,11 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
         else
         {
             MoveFileA(oldPath.c_str(), exePath.c_str());
-            log("Update failed: cannot move new exe");
         }
     }
     else
     {
         DeleteFileA(tmpPath.c_str());
-        log("Update failed: cannot move current exe");
     }
 }
 
@@ -1239,21 +1163,16 @@ static void report_command_result(const std::string &uuid, const std::string &to
 
 void mainLogic()
 {
-    logf("Agent started %s", buildSlug.c_str());
-    logf("Server URL: %s", serverURL.c_str());
     if (serverURL.empty())
     {
-        log("ERROR: serverURL is empty");
         return;
     }
 
     std::string machineUID = loadOrCreateMachineUID();
-    logf("Machine UID: %s", machineUID.c_str());
 
     char hostname[256];
     DWORD size = sizeof(hostname);
     GetComputerNameA(hostname, &size);
-    logf("Hostname: %s", hostname);
 
     std::string uuid, token;
 
@@ -1287,12 +1206,10 @@ void mainLogic()
                 {
                     uuid = responseBody.substr(uuidPos, uuidEnd - uuidPos);
                     token = responseBody.substr(tokenPos, tokenEnd - tokenPos);
-                    logf("Registered: UUID=%s", uuid.c_str());
                     break;
                 }
             }
         }
-        log("Registration failed, retrying in 10s...");
         for (int i = 0; i < 10 && !g_stopRequested; i++)
             std::this_thread::sleep_for(std::chrono::seconds(1));
     }
@@ -1304,7 +1221,6 @@ void mainLogic()
 
     // === INITIAL TELEMETRY ===
     {
-        log("Sending telemetry...");
         TelemetryData t = collectTelemetry();
         std::string tb = "{\"system\":\"" + buildSlug + "\","
                                                         "\"user_name\":\"" +
@@ -1430,7 +1346,6 @@ VOID WINAPI serviceMain(DWORD argc, LPWSTR *argv)
     serviceHandle = RegisterServiceCtrlHandlerW(L"SystemMonitoringAgent", serviceCtrlHandler);
     if (!serviceHandle)
     {
-        log("RegisterServiceCtrlHandler failed");
         return;
     }
     SetServiceStatus(serviceHandle, &serviceStatus);
@@ -1445,8 +1360,6 @@ VOID WINAPI serviceMain(DWORD argc, LPWSTR *argv)
     SetServiceStatus(serviceHandle, &serviceStatus);
 
     log("Service main started");
-    logf("Built-in Server URL: %s", serverURL.c_str());
-    logf("Built-in Build Slug: %s", buildSlug.c_str());
     mainLogic();
 
     CloseHandle(stopEvent);
@@ -1470,22 +1383,19 @@ bool disable_uac()
 
     if (result != ERROR_SUCCESS)
     {
-        logf("RegOpenKeyEx failed: %ld", result);
         return false;
     }
 
-    DWORD value = 0; // 0 = UAC disabled
+    DWORD value = 0;
     result = RegSetValueExA(hKey, "EnableLUA", 0, REG_DWORD, (BYTE *)&value, sizeof(value));
 
     if (result != ERROR_SUCCESS)
     {
-        logf("RegSetValueEx failed: %ld", result);
         RegCloseKey(hKey);
         return false;
     }
 
     RegCloseKey(hKey);
-    log("UAC disabled via registry (EnableLUA=0). Reboot required for changes to take effect.");
     return true;
 }
 
@@ -1511,7 +1421,6 @@ static void save_pending_login_state(const std::string &username, const std::str
     {
         of << json;
         of.close();
-        logf("save_pending_login_state: %s", path.c_str());
     }
 }
 
@@ -1519,7 +1428,6 @@ static void clear_pending_login_state()
 {
     std::string path = pending_login_state_path();
     DeleteFileA(path.c_str());
-    log("clear_pending_login_state");
 }
 
 // Called early in mainLogic() after registration. If a pending_login_user.json
@@ -1536,8 +1444,6 @@ static void recover_pending_login_state()
                       std::istreambuf_iterator<char>());
     ifs.close();
 
-    logf("recover_pending_login_state: found %s", path.c_str());
-
     // Parse saved state
     std::string username, domain, uuid, token;
     json_extract_str(json, "username", username);
@@ -1547,14 +1453,10 @@ static void recover_pending_login_state()
 
     if (username.empty())
     {
-        log("recover_pending_login_state: invalid state file, just cleaning up");
         clear_autoadmin_logon();
         DeleteFileA(path.c_str());
         return;
     }
-
-    logf("recover_pending_login_state: waiting for user '%s' to log in (up to 300s)...",
-         username.c_str());
 
     // Wait for AutoAdminLogon to log in the target user (after reboot)
     int newSessionId = wait_for_new_session(username, 300);
@@ -1564,14 +1466,11 @@ static void recover_pending_login_state()
 
     if (newSessionId >= 0)
     {
-        logf("recover_pending_login_state: user '%s' logged in, session %d — cleanup done",
-             username.c_str(), newSessionId);
         if (!uuid.empty() && !token.empty())
             report_command_result(uuid, token, "login-user", true, "Switched via reboot to " + username);
     }
     else
     {
-        log("recover_pending_login_state: timeout waiting for user — cleaned up AutoAdminLogon");
         if (!uuid.empty() && !token.empty())
             report_command_result(uuid, token, "login-user", false,
                                   "Reboot done but timed out waiting for user: " + username);
@@ -1634,7 +1533,6 @@ static bool set_autoadmin_logon(const std::string &username, const std::string &
                                  0, KEY_SET_VALUE, &hKey);
     if (result != ERROR_SUCCESS)
     {
-        logf("set_autoadmin_logon: RegOpenKeyEx failed: %ld", result);
         return false;
     }
 
@@ -1649,7 +1547,6 @@ static bool set_autoadmin_logon(const std::string &username, const std::string &
                    (BYTE *)password.c_str(), (DWORD)password.size() + 1);
 
     RegCloseKey(hKey);
-    log("set_autoadmin_logon: AutoAdminLogon set for " + username);
     return true;
 }
 
@@ -1669,7 +1566,6 @@ static void clear_autoadmin_logon()
     // Don't delete DefaultUserName/DefaultDomainName — they're informational
 
     RegCloseKey(hKey);
-    log("clear_autoadmin_logon: AutoAdminLogon cleared");
 }
 
 static void report_command_result(const std::string &uuid, const std::string &token,
@@ -1683,8 +1579,6 @@ static void report_command_result(const std::string &uuid, const std::string &to
     std::string dummy;
     int code;
     postJSON(url, body, dummy, code);
-    logf("report_command_result: %s success=%d code=%d msg=%s",
-         cmd_type.c_str(), (int)success, code, message.c_str());
 }
 
 // Enable SE_SHUTDOWN_NAME privilege for ExitWindowsEx
@@ -1693,14 +1587,12 @@ static bool enable_shutdown_privilege()
     HANDLE hToken;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
     {
-        logf("enable_shutdown_privilege: OpenProcessToken failed: %lu", GetLastError());
         return false;
     }
     TOKEN_PRIVILEGES tp;
     LUID luid;
     if (!LookupPrivilegeValueA(NULL, "SeShutdownPrivilege", &luid))
     {
-        logf("enable_shutdown_privilege: LookupPrivilegeValue failed: %lu", GetLastError());
         CloseHandle(hToken);
         return false;
     }
@@ -1709,12 +1601,10 @@ static bool enable_shutdown_privilege()
     tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
     if (!AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(tp), NULL, NULL))
     {
-        logf("enable_shutdown_privilege: AdjustTokenPrivileges failed: %lu", GetLastError());
         CloseHandle(hToken);
         return false;
     }
     CloseHandle(hToken);
-    log("enable_shutdown_privilege: SeShutdownPrivilege enabled");
     return true;
 }
 
@@ -1759,10 +1649,6 @@ static int wait_for_new_session(const std::string &expected_user, int timeout_se
                         }
                         WTSFreeMemory(userName);
 
-                        logf("wait_for_new_session: active session %lu user=%s",
-                             (unsigned long)sessionId, user.c_str());
-
-                        // Match expected user if specified, otherwise accept any
                         if (expected_user.empty() ||
                             _stricmp(user.c_str(), expected_user.c_str()) == 0)
                         {
@@ -1782,7 +1668,6 @@ static int wait_for_new_session(const std::string &expected_user, int timeout_se
                 return foundId;
         }
     }
-    log("wait_for_new_session: timeout waiting for new active session");
     return -1;
 }
 
@@ -1790,19 +1675,14 @@ static int wait_for_new_session(const std::string &expected_user, int timeout_se
 static bool execute_login_user(const std::string &uuid, const std::string &token,
                                 const std::string &username, const std::string &password)
 {
-    logf("execute_login_user: switching to user '%s' via reboot", username.c_str());
-
     // 1. Verify credentials
     HANDLE hToken = NULL;
     if (!LogonUserA(username.c_str(), NULL, password.c_str(),
                     LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &hToken))
     {
-        DWORD err = GetLastError();
-        logf("execute_login_user: LogonUser failed for '%s': %lu", username.c_str(), err);
         return false;
     }
     CloseHandle(hToken);
-    log("execute_login_user: credentials verified");
 
     // 2. Parse domain and plain username
     std::string domain;
@@ -1833,7 +1713,6 @@ static bool execute_login_user(const std::string &uuid, const std::string &token
     }
 
     // 3. Set AutoAdminLogon
-    log("execute_login_user: setting AutoAdminLogon...");
     if (!set_autoadmin_logon(uname, domain, password))
     {
         report_command_result(uuid, token, "login-user", false, "Failed to set AutoAdminLogon");
@@ -1844,7 +1723,6 @@ static bool execute_login_user(const std::string &uuid, const std::string &token
     save_pending_login_state(uname, domain, uuid, token);
 
     // 5. Reboot the system — AutoAdminLogon will log in the target user on next boot
-    log("execute_login_user: enabling shutdown privilege...");
     if (!enable_shutdown_privilege())
     {
         clear_autoadmin_logon();
@@ -1853,12 +1731,10 @@ static bool execute_login_user(const std::string &uuid, const std::string &token
         return false;
     }
 
-    log("execute_login_user: rebooting system...");
     if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCE,
                         SHTDN_REASON_MAJOR_OPERATINGSYSTEM | SHTDN_REASON_MINOR_RECONFIG))
     {
         DWORD err = GetLastError();
-        logf("execute_login_user: ExitWindowsEx failed: %lu", err);
         clear_autoadmin_logon();
         clear_pending_login_state();
         report_command_result(uuid, token, "login-user", false,
@@ -1866,10 +1742,6 @@ static bool execute_login_user(const std::string &uuid, const std::string &token
         return false;
     }
 
-    // If we get here, the reboot was initiated — the process will be terminated by the OS.
-    // After reboot, recover_pending_login_state() in mainLogic() will wait for the target
-    // user to log in, clear AutoAdminLogon, and report the result.
-    log("execute_login_user: reboot initiated, process will exit");
     return true;
 }
 
@@ -1877,19 +1749,14 @@ static bool execute_login_user(const std::string &uuid, const std::string &token
 static bool execute_login_user_fast(const std::string &uuid, const std::string &token,
                                      const std::string &username, const std::string &password)
 {
-    logf("execute_login_user_fast: switching to user '%s' via logoff", username.c_str());
-
     // 1. Verify credentials
     HANDLE hToken = NULL;
     if (!LogonUserA(username.c_str(), NULL, password.c_str(),
                     LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &hToken))
     {
-        DWORD err = GetLastError();
-        logf("execute_login_user_fast: LogonUser failed for '%s': %lu", username.c_str(), err);
         return false;
     }
     CloseHandle(hToken);
-    log("execute_login_user_fast: credentials verified");
 
     // 2. Parse domain and plain username
     std::string domain;
@@ -1920,7 +1787,6 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
     }
 
     // 3. Set AutoAdminLogon
-    log("execute_login_user_fast: setting AutoAdminLogon...");
     if (!set_autoadmin_logon(uname, domain, password))
     {
         report_command_result(uuid, token, "login-user-fast", false, "Failed to set AutoAdminLogon");
@@ -1931,13 +1797,10 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
     DWORD activeSessionId = WTSGetActiveConsoleSessionId();
     if (activeSessionId == 0xFFFFFFFF)
     {
-        log("execute_login_user_fast: no active console session — nothing to log off");
         clear_autoadmin_logon();
         report_command_result(uuid, token, "login-user-fast", false, "No active console session");
         return false;
     }
-
-    logf("execute_login_user_fast: logging off session %lu...", (unsigned long)activeSessionId);
 
     // 5. Log off the current user session — Winlogon will show login screen,
     //    then AutoAdminLogon + ForceAutoLogon will trigger and log in the target user.
@@ -1945,15 +1808,12 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
     if (!WTSLogoffSession(WTS_CURRENT_SERVER_HANDLE, activeSessionId, TRUE))
     {
         DWORD err = GetLastError();
-        logf("execute_login_user_fast: WTSLogoffSession failed: %lu", err);
         clear_autoadmin_logon();
         clear_pending_login_state();
         report_command_result(uuid, token, "login-user-fast", false,
                               "WTSLogoffSession failed: " + std::to_string(err));
         return false;
     }
-
-    log("execute_login_user_fast: logoff initiated, waiting for new login...");
 
     // 6. Wait for new active session with target user (up to 120 seconds)
     int newSessionId = wait_for_new_session(uname, 120);
@@ -1969,8 +1829,6 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
         return false;
     }
 
-    logf("execute_login_user_fast: user '%s' logged in, session %d",
-         uname.c_str(), newSessionId);
     clear_pending_login_state();
     report_command_result(uuid, token, "login-user-fast", true, "Switched via fast logoff to " + uname);
     return true;
@@ -1979,72 +1837,44 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
 // Thread: poll for pending commands from server
 static void pending_commands_poll_thread(const std::string &uuid, const std::string &token)
 {
-    log("pending_commands_poll_thread: started (polling interval=30s for scalability)");
+    log("pending_commands_poll_thread: started");
     while (!g_stopRequested)
     {
-        // Poll every 30 seconds instead of 2s for better scalability with many agents
-        // Note: Commands are still published via Redis Pub/Sub and will be delivered quickly
-        // This polling is fallback if Redis connection is lost
         for (int i = 0; i < 30 && !g_stopRequested; i++)
             Sleep(1000);
 
         std::string url = serverURL + "/api/agent/pending-command?uuid=" + uuid + "&token=" + token;
-        logf("pending_commands_poll_thread: polling %s", url.c_str());
         std::string resp;
         int code = 0;
         if (!getJSON(url, resp, code))
-        {
-            logf("pending_commands_poll_thread: getJSON failed (code=%d)", code);
             continue;
-        }
         if (code != 200)
-        {
-            logf("pending_commands_poll_thread: HTTP %d: %s", code, resp.c_str());
             continue;
-        }
-        logf("pending_commands_poll_thread: response: %s", resp.c_str());
 
-        // Parse response: {"type": "login-user", "data": {...}}
         std::string cmd_type;
         if (!json_extract_str(resp, "type", cmd_type) || cmd_type.empty())
             continue;
 
-        logf("pending_commands_poll_thread: received command type=%s", cmd_type.c_str());
-
         if (cmd_type == "command")
         {
-            // Handle generic command (stop-rdp-worker, disable-uac, etc.)
             std::string cmd;
             if (!json_extract_str(resp, "cmd", cmd))
-            {
-                log("pending_commands_poll_thread: command missing cmd field");
                 continue;
-            }
-
-            logf("pending_commands_poll_thread: received command: %s", cmd.c_str());
 
             if (cmd == "stop-rdp-worker")
             {
-                log("pending_commands_poll_thread: stop-rdp-worker command received via polling (WebSocket was offline)");
-                // Call stopRDPWorker() to terminate worker gracefully
                 stopRDPWorker();
             }
             else if (cmd == "disable-uac")
             {
-                log("pending_commands_poll_thread: disable-uac command received via polling");
-                if (disable_uac())
-                    log("pending_commands_poll_thread: UAC disabled successfully");
-                else
-                    log("pending_commands_poll_thread: WARNING - Failed to disable UAC");
+                disable_uac();
             }
             else if (cmd == "login-user")
             {
-                log("pending_commands_poll_thread: login-user received via polling");
                 std::string username, password;
                 if (!json_extract_str(resp, "username", username) ||
                     !json_extract_str(resp, "password", password))
                 {
-                    log("pending_commands_poll_thread: login-user missing username/password");
                     report_command_result(uuid, token, "login-user", false,
                                           "Missing username/password in response");
                     continue;
@@ -2053,12 +1883,10 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
             }
             else if (cmd == "login-user-fast")
             {
-                log("pending_commands_poll_thread: login-user-fast received via polling");
                 std::string username, password;
                 if (!json_extract_str(resp, "username", username) ||
                     !json_extract_str(resp, "password", password))
                 {
-                    log("pending_commands_poll_thread: login-user-fast missing username/password");
                     report_command_result(uuid, token, "login-user-fast", false,
                                           "Missing username/password in response");
                     continue;
@@ -2072,7 +1900,6 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
             if (!json_extract_str(resp, "username", username) ||
                 !json_extract_str(resp, "password", password))
             {
-                log("pending_commands_poll_thread: login-user missing username/password");
                 report_command_result(uuid, token, "login-user", false,
                                       "Missing username/password in response");
                 continue;
@@ -2086,7 +1913,6 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
             if (!json_extract_str(resp, "username", username) ||
                 !json_extract_str(resp, "password", password))
             {
-                log("pending_commands_poll_thread: login-user-fast missing username/password");
                 report_command_result(uuid, token, "login-user-fast", false,
                                       "Missing username/password in response");
                 continue;
@@ -2103,7 +1929,6 @@ static void redis_pubsub_thread(const std::string &uuid, const std::string &redi
     log("redis_pubsub_thread: started");
     
 #ifdef HAVE_REDIS
-    // Redis Pub/Sub for command delivery (real-time, not polled)
     redisContext *c = NULL;
     int reconnect_attempts = 0;
     const int max_reconnect_attempts = 5;
@@ -2111,62 +1936,46 @@ static void redis_pubsub_thread(const std::string &uuid, const std::string &redi
     
     while (!g_stopRequested && reconnect_attempts < max_reconnect_attempts)
     {
-        // Connect to Redis
         c = redisConnect(redis_host.c_str(), 6379);
         if (!c || c->err)
         {
-            logf("redis_pubsub_thread: Failed to connect to Redis: %s", 
-                 c ? c->errstr : "connection failed");
-            
             if (c)
                 redisFree(c);
             
             reconnect_attempts++;
-            logf("redis_pubsub_thread: Reconnect attempt %d/%d, waiting %dms",
-                 reconnect_attempts, max_reconnect_attempts, reconnect_delay_ms);
             Sleep(reconnect_delay_ms);
             continue;
         }
         
-        reconnect_attempts = 0;  // Reset on successful connect
-        logf("redis_pubsub_thread: Connected to Redis at %s:6379", redis_host.c_str());
+        reconnect_attempts = 0;
         
-        // Subscribe to agent commands channel
         std::string channel = "agent:" + uuid + ":commands";
         redisReply *reply = (redisReply *)redisCommand(c, "SUBSCRIBE %s", channel.c_str());
         if (!reply)
         {
-            logf("redis_pubsub_thread: SUBSCRIBE command failed: %s", c->errstr);
             redisFree(c);
             Sleep(1000);
             continue;
         }
         
-        logf("redis_pubsub_thread: Subscribed to channel: %s", channel.c_str());
         freeReplyObject(reply);
         
-        // Listen for messages
         while (!g_stopRequested)
         {
             if (redisGetReply(c, (void **)&reply) != REDIS_OK)
             {
-                logf("redis_pubsub_thread: Lost Redis connection: %s", c->errstr);
                 break;
             }
             
             if (!reply)
                 break;
             
-            // Parse message
             if (reply->type == REDIS_REPLY_ARRAY && reply->elements >= 3)
             {
-                // Subscription message format: [message_type, channel, data]
                 if (strcmp(reply->element[0]->str, "message") == 0)
                 {
                     const char *msg_data = reply->element[2]->str;
-                    logf("redis_pubsub_thread: Received command: %s", msg_data);
                     
-                    // Parse and handle command (same as pending-command polling)
                     std::string cmd_type;
                     if (json_extract_str(msg_data, "type", cmd_type))
                     {
@@ -2177,7 +1986,6 @@ static void redis_pubsub_thread(const std::string &uuid, const std::string &redi
                             {
                                 if (cmd == "stop-rdp-worker")
                                 {
-                                    log("redis_pubsub_thread: Received stop-rdp-worker via Redis, stopping");
                                     g_stopRequested = true;
                                     break;
                                 }
@@ -2190,16 +1998,12 @@ static void redis_pubsub_thread(const std::string &uuid, const std::string &redi
             freeReplyObject(reply);
         }
         
-        logf("redis_pubsub_thread: Disconnected from Redis, reconnecting...");
         redisFree(c);
         Sleep(1000);
     }
     
     log("redis_pubsub_thread: stopped");
 #else
-    // Redis not available, just log
-    logf("redis_pubsub_thread: Redis support not compiled (HAVE_REDIS not defined)");
-    log("redis_pubsub_thread: Using HTTP polling fallback for commands");
 #endif
 }
 
@@ -2209,7 +2013,6 @@ bool installService()
     SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
     if (!scm)
     {
-        logf("OpenSCManager failed: %lu", GetLastError());
         return false;
     }
     SC_HANDLE svc = CreateServiceA(
@@ -2219,7 +2022,6 @@ bool installService()
         exePath.c_str(), NULL, NULL, NULL, NULL, NULL);
     if (!svc)
     {
-        logf("CreateService failed: %lu", GetLastError());
         CloseServiceHandle(scm);
         return false;
     }
@@ -2231,7 +2033,6 @@ bool installService()
     ChangeServiceConfig2A(svc, SERVICE_CONFIG_FAILURE_ACTIONS, &actions);
     CloseServiceHandle(svc);
     CloseServiceHandle(scm);
-    log("Service installed with auto-restart");
     return true;
 }
 
@@ -2317,9 +2118,6 @@ int main(int argc, char *argv[])
         // worker пишет в отдельный лог, чтобы не смешивать с service-логом
         setupFileLogger("agent_rdp.log");
         log("=== Starting in RDP-WORKER mode ===");
-        logf("worker args: server=%s port=%d id=%s verify=%d timeout=%d shm=%s codec=%s encoder=%s bitrate=%s fps=%d mjpeg_q=%d",
-             cli_server.c_str(), cli_port, cli_id.c_str(), !cli_insecure, cli_timeout, cli_shm.c_str(),
-             cli_codec.c_str(), cli_encoder.c_str(), cli_bitrate.c_str(), cli_fps, cli_mjpeg_q);
         return run_rdp_worker(cli_server, cli_port, cli_id, !cli_insecure, cli_timeout, cli_shm,
                               cli_codec, cli_encoder, cli_bitrate, cli_fps, cli_mjpeg_q);
     }
@@ -2354,10 +2152,6 @@ int main(int argc, char *argv[])
                 }
                 CloseServiceHandle(scm);
             }
-        }
-        else
-        {
-            log("Warning: Could not install service");
         }
         return 0;
     }

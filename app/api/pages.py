@@ -347,7 +347,6 @@ async def change_agent_department(
         }
     except Exception as e:
         await session.rollback()
-        logger.error(f"Ошибка изменения отдела агента {agent_id}: {e}")
         return JSONResponse(
             status_code=500,
             content={

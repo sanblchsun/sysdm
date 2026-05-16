@@ -52,7 +52,6 @@ class PubSubManager:
     async def _run(self):
         ps = self._pubsub
         if ps is None:
-            logger.error("[pubsub] _run called before start()")
             return
         while True:
             try:
@@ -62,8 +61,7 @@ class PubSubManager:
                     await self._dispatch(msg)
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"[pubsub] listener error: {e}")
+            except Exception:
                 await asyncio.sleep(1)
 
     async def _dispatch(self, msg):
@@ -112,8 +110,8 @@ class PubSubManager:
                 if a:
                     frame = data if isinstance(data, bytes) else data.encode()
                     a.push_mjpeg(frame)
-            except Exception as e:
-                logger.warning(f"[relay] Error pushing MJPEG frame for {aid}: {e}")
+            except Exception:
+                pass
 
         elif channel.startswith("video:h264:"):
             aid = channel[11:]
@@ -123,15 +121,15 @@ class PubSubManager:
                 if a:
                     chunk = data if isinstance(data, bytes) else data.encode()
                     a.push_h264(chunk)
-            except Exception as e:
-                logger.warning(f"[relay] Error pushing H264 chunk for {aid}: {e}")
+            except Exception:
+                pass
 
     async def publish(self, channel: str, message):
         if self._pubsub_conn:
             try:
                 await self._pubsub_conn.publish(channel, message)
-            except Exception as e:
-                logger.warning(f"[pubsub] publish {channel}: {e}")
+            except Exception:
+                pass
 
     async def stop(self):
         if self._task:
@@ -388,8 +386,8 @@ async def get_agent(aid: str) -> AgentState:
         a = AgentState(aid)
         try:
             await a.load_from_redis()
-        except Exception as e:
-            logger.warning(f"[relay] redis load failed for {aid}: {e}")
+        except Exception:
+            pass
         AGENTS[aid] = a
         return a
 
@@ -400,26 +398,21 @@ async def send_command_to_agent(agent_id: str, command: dict) -> bool:
         try:
             msg = json.dumps(command)
             await agent_ws.send_text(msg)
-            logger.info(f"[relay] Command sent locally to agent {agent_id}")
             return True
-        except Exception as e:
-            logger.error(f"[relay] Failed to send command to agent {agent_id}: {e}")
+        except Exception:
             return False
     try:
         r = await get_redis()
         worker = await r.get(REDIS_WORKER_KEY.format(aid=agent_id))
         if not worker:
-            logger.warning(f"[relay] Agent {agent_id} not connected to any worker")
             return False
     except Exception:
         pass
     try:
         msg = json.dumps(command)
         await PS_MANAGER.publish(f"ctrl:to:{agent_id}", msg)
-        logger.info(f"[relay] Command published to Redis for agent {agent_id}")
         return True
-    except Exception as e:
-        logger.error(f"[relay] Failed to publish command for agent {agent_id}: {e}")
+    except Exception:
         return False
 
 
@@ -501,8 +494,8 @@ async def ws_control_agent(ws: WebSocket, aid: str):
                 await PS_MANAGER.publish(f"ctrl:from:{aid}", msg)
     except WebSocketDisconnect:
         pass
-    except Exception as e:
-        logger.error(f"[relay] agent {aid}: {e}")
+    except Exception:
+        pass
     finally:
         if HUB.agent_ws.get(aid) is ws:
             HUB.agent_ws.pop(aid, None)
@@ -549,8 +542,8 @@ async def ws_control_worker(ws: WebSocket, aid: str):
                 pass
     except WebSocketDisconnect:
         pass
-    except Exception as e:
-        logger.error(f"[relay] worker {aid}: {e}")
+    except Exception:
+        pass
     finally:
         if HUB.worker_ws.get(aid) is ws:
             HUB.worker_ws.pop(aid, None)
@@ -612,16 +605,12 @@ async def ws_control_viewer(ws: WebSocket, aid: str):
                 await PS_MANAGER.publish(f"ctrl:to:{aid}", msg)
     except WebSocketDisconnect:
         pass
-    except Exception as e:
-        logger.error(f"[relay] viewer {aid}: {e}")
+    except Exception:
+        pass
     finally:
         s = HUB.viewer_ws.get(aid)
         if s is not None:
             s.discard(ws)
-        # NOTE: Do NOT auto-stop RDP when last viewer disconnects!
-        # Worker lifecycle is managed only by dashboard or API calls,
-        # not by viewer connections. Multiple viewers can connect/disconnect
-        # independently without affecting the RDP session.
         logger.info(f"[relay] viewer disconnected: {aid}")
 
 
@@ -664,9 +653,8 @@ async def set_config(aid: str, body: RelayConfigBody):
     if changed:
         try:
             await a.persist_config(changed)
-        except Exception as e:
-            logger.warning(f"[relay] redis persist failed for {aid}: {e}")
-        # Push config to running worker via WebSocket
+        except Exception:
+            pass
         try:
             ws = HUB.worker_ws.get(aid)
             if ws:
@@ -680,9 +668,8 @@ async def set_config(aid: str, body: RelayConfigBody):
                     "rdp_timeout": a.rdp_timeout_target,
                 })
                 await ws.send_text(config_msg)
-                logger.info(f"[relay] config pushed to worker {aid}")
-        except Exception as e:
-            logger.warning(f"[relay] failed to push config to worker {aid}: {e}")
+        except Exception:
+            pass
     return {
         "status": "ok",
         "target": {
@@ -713,16 +700,10 @@ async def ingest(aid: str, request: Request):
     except:
         a.fps_current = None
 
-    logger.info(
-        f"[relay] ingest START: id={aid}, content-type={ctype}, encoder={a.encoder_current}, bitrate={a.bitrate_current}, fps={a.fps_current}"
-    )
-
     if "h264" in ctype:
         a.codec_current = "h264"
         a.updated = time.time()
         await a.persist_runtime()
-        client_host = request.client.host if request.client else "unknown"
-        logger.info(f"[relay] h264/{a.encoder_current} <- {client_host} id={aid}")
         frame_count = 0
         try:
             async for chunk in request.stream():
@@ -732,16 +713,14 @@ async def ingest(aid: str, request: Request):
                     if frame_count % 300 == 0 and time.time() - a._last_redis_sync > 15:
                         a._last_redis_sync = time.time()
                         await a.persist_runtime()
-        except Exception as e:
-            logger.error(f"[relay] h264 {aid} err: {e}")
+        except Exception:
+            pass
         logger.info(f"[relay] h264 {aid} stream finished: {frame_count} chunks, total keyframes={a.h264_count}")
         return {"status": "ok", "mode": "h264"}
     else:
         a.codec_current = "mjpeg"
         a.updated = time.time()
         await a.persist_runtime()
-        client_host = request.client.host if request.client else "unknown"
-        logger.info(f"[relay] mjpeg <- {client_host} id={aid}")
         buf = bytearray()
         offset = 0
         frame_count = 0
@@ -761,11 +740,9 @@ async def ingest(aid: str, request: Request):
                     if frame_count % 10 == 0 and time.time() - a._last_redis_sync > 15:
                         a._last_redis_sync = time.time()
                         await a.persist_runtime()
-                    if frame_count % 10 == 0:
-                        logger.info(f"[relay] mjpeg {aid}: {frame_count} frames decoded so far")
-        except Exception as e:
-            logger.error(f"[relay] mjpeg {aid} err: {e}", exc_info=True)
-        logger.info(f"[relay] mjpeg {aid} stream finished: {frame_count} frames decoded from {total_bytes} bytes, updated={a.updated}")
+        except Exception:
+            pass
+        logger.info(f"[relay] mjpeg {aid} stream finished: {frame_count} frames decoded from {total_bytes} bytes")
         return {"status": "ok", "mode": "mjpeg"}
 
 
@@ -815,8 +792,8 @@ async def ws_h264(ws: WebSocket, aid: str):
             await ws.send_bytes(chunk)
     except WebSocketDisconnect:
         pass
-    except Exception as e:
-        logger.error(f"[relay] h264 {aid} err: {e}")
+    except Exception:
+        pass
     finally:
         a.h264_subscribers.discard(q)
 
@@ -843,8 +820,8 @@ async def list_agents() -> AgentsListResponse:
                 agent_ids.add(aid)
             if cursor == 0:
                 break
-    except Exception as e:
-        logger.warning(f"[relay] Failed to scan Redis for agents: {e}")
+    except Exception:
+        pass
 
     for aid in agent_ids:
         async with LOCK:
@@ -861,8 +838,7 @@ async def list_agents() -> AgentsListResponse:
                         a = AgentState(aid)
                         await a.load_from_redis()
                         AGENTS[aid] = a
-            except Exception as e:
-                logger.error(f"[relay] Failed to load agent {aid}: {e}")
+            except Exception:
                 continue
 
         alive = a.updated > 0 and (now - a.updated) < 30.0
@@ -902,7 +878,6 @@ async def list_agents() -> AgentsListResponse:
                 },
             )
         )
-    logger.info(f"[relay] list_agents returning {len(out)} agents")
     return AgentsListResponse(agents=out)
 
 
@@ -914,29 +889,25 @@ async def ws_agent_status_sync(websocket: WebSocket):
     Server subscribes to Redis 'agent:status' channel and forwards updates to client.
     """
     await websocket.accept()
-    logger.info("[relay] Agent status sync WebSocket connected")
     
     r = await get_redis()
     pubsub = r.pubsub()
     try:
         await pubsub.subscribe("agent:status")
-        logger.info("[relay] Subscribed to agent:status channel")
         
         async for message in pubsub.listen():
             if message["type"] == "message":
                 try:
-                    # Forward agent status update to client
                     data = message["data"]
                     if isinstance(data, bytes):
                         data = data.decode()
                     await websocket.send_text(data)
-                except Exception as e:
-                    logger.warning(f"[relay] Failed to send status update: {e}")
+                except Exception:
                     break
     except WebSocketDisconnect:
-        logger.info("[relay] Agent status sync WebSocket disconnected")
-    except Exception as e:
-        logger.error(f"[relay] Agent status sync error: {e}")
+        pass
+    except Exception:
+        pass
     finally:
         await pubsub.unsubscribe("agent:status")
         await pubsub.close()

@@ -8,7 +8,6 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
-import logging
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -22,12 +21,6 @@ from app.config import settings
 from app.redis_client import get_redis
 from app.database import get_db
 
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -117,7 +110,6 @@ async def healthz():
         await r.ping()
         redis_status = "ok"
     except Exception as e:
-        logger.error(f"[healthz] Redis check failed: {e}")
         redis_status = f"error: {str(e)}"
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {e}")
     
@@ -129,7 +121,6 @@ async def healthz():
             db_status = "ok"
             break  # Exit loop after successful check
     except Exception as e:
-        logger.error(f"[healthz] Database check failed: {e}")
         db_status = f"error: {str(e)}"
         raise HTTPException(status_code=503, detail=f"Database unavailable: {e}")
     
