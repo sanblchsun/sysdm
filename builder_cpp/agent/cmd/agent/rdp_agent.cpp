@@ -356,37 +356,6 @@ int RDPAgent::tls_recv_n(TlsConn *c, char *p, int n)
 }
 
 // ============ HTTP GET ============
-std::string RDPAgent::http_get(const std::string &host, int port,
-                               const std::string &path, bool verify_cert)
-{
-    TlsConn *c = tls_connect(host, port, verify_cert);
-    if (!c)
-        return {};
-    std::ostringstream r;
-    r << "GET " << path << " HTTP/1.1\r\nHost: " << host << ":" << port
-      << "\r\nConnection: close\r\nAccept: text/plain\r\n\r\n";
-    std::string req = r.str();
-    if (!tls_send_all(c, req.data(), (int)req.size()))
-    {
-        tls_close(c);
-        delete c;
-        return {};
-    }
-    std::string all;
-    char buf[4096];
-    for (;;)
-    {
-        int n = tls_recv_some(c, buf, sizeof buf);
-        if (n <= 0)
-            break;
-        all.append(buf, (size_t)n);
-    }
-    tls_close(c);
-    delete c;
-    auto p2 = all.find("\r\n\r\n");
-    return p2 == std::string::npos ? std::string{} : all.substr(p2 + 4);
-}
-
 // ============ JSON ============
 bool RDPAgent::json_str(const std::string &j, const std::string &k, std::string &out)
 {
@@ -1199,6 +1168,48 @@ void RDPAgent::handle_control(const std::string &j)
             }
         }
     }
+    else if (type == "config")
+    {
+        std::string codec, encoder, bitrate;
+        int fps = 0, mq = 0, new_timeout = -1;
+        json_str(j, "codec", codec);
+        json_str(j, "encoder", encoder);
+        json_str(j, "bitrate", bitrate);
+        json_int(j, "fps", fps);
+        json_int(j, "mjpeg_q", mq);
+        json_int(j, "rdp_timeout", new_timeout);
+
+        if (codec.empty())
+            return;
+
+        std::string sig = codec + "|" + encoder + "|" + bitrate + "|" +
+                          std::to_string(fps) + "|" + std::to_string(mq);
+        if (sig == last_config_sig)
+            return;
+        last_config_sig = sig;
+
+        {
+            std::lock_guard<std::mutex> lk(runtime.m);
+            runtime.codec = codec;
+            runtime.encoder = encoder.empty() ? "cpu" : encoder;
+            runtime.bitrate = bitrate.empty() ? "4M" : bitrate;
+            if (fps > 0)
+                runtime.framerate = fps;
+            if (mq > 0)
+                runtime.mjpeg_q = mq;
+            runtime.restart = true;
+        }
+
+        if (new_timeout >= 0 && shm && new_timeout != shm->timeout_min)
+        {
+            logf("rdp_timeout changed: %d -> %d min", (int)shm->timeout_min, new_timeout);
+            shm->timeout_min = new_timeout;
+        }
+
+        log("config changed: codec=" + codec + " encoder=" + (encoder.empty() ? "cpu" : encoder) +
+            " bitrate=" + (bitrate.empty() ? "4M" : bitrate) +
+            " fps=" + std::to_string(fps) + " mjpeg_q=" + std::to_string(mq));
+    }
 }
 
 // ============ FFMPEG ============
@@ -1404,71 +1415,6 @@ void RDPAgent::control_loop()
     }
 }
 
-void RDPAgent::poll_config_loop()
-{
-    std::string last_sig;
-    while (!runtime.stop)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(config.config_poll_ms));
-        std::string body = http_get(config.server_host, config.server_port,
-                                    "/relay/agents/" + config.agent_id + "/config",
-                                    config.verify_cert);
-        if (body.empty())
-            continue;
-        std::string codec, encoder, bitrate;
-        int fps = 0, mq = 0, new_timeout = -1;
-        std::istringstream iss(body);
-        std::string line;
-        while (std::getline(iss, line))
-        {
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-            auto eq = line.find('=');
-            if (eq == std::string::npos)
-                continue;
-            std::string k = line.substr(0, eq), v = line.substr(eq + 1);
-            if (k == "codec")
-                codec = v;
-            else if (k == "encoder")
-                encoder = v;
-            else if (k == "bitrate")
-                bitrate = v;
-            else if (k == "fps")
-                fps = std::atoi(v.c_str());
-            else if (k == "mjpeg_q")
-                mq = std::atoi(v.c_str());
-            else if (k == "rdp_timeout")
-                new_timeout = std::atoi(v.c_str());
-        }
-
-        // rdp_timeout обновляется в shared memory (без перезапуска сессии)
-        if (new_timeout >= 0 && shm && new_timeout != shm->timeout_min)
-        {
-            logf("rdp_timeout changed: %d -> %d min", (int)shm->timeout_min, new_timeout);
-            shm->timeout_min = new_timeout;
-        }
-
-        if (codec.empty())
-            continue;
-        std::string sig = codec + "|" + encoder + "|" + bitrate + "|" +
-                          std::to_string(fps) + "|" + std::to_string(mq);
-        if (sig == last_sig)
-            continue;
-        last_sig = sig;
-        std::lock_guard<std::mutex> lk(runtime.m);
-        runtime.codec = codec;
-        runtime.encoder = encoder.empty() ? "cpu" : encoder;
-        runtime.bitrate = bitrate.empty() ? "4M" : bitrate;
-        if (fps > 0)
-            runtime.framerate = fps;
-        if (mq > 0)
-            runtime.mjpeg_q = mq;
-        runtime.restart = true;
-        log("config changed: codec=" + runtime.codec + " encoder=" + runtime.encoder +
-            " bitrate=" + runtime.bitrate + " fps=" + std::to_string(runtime.framerate));
-    }
-}
-
 void RDPAgent::resolution_watch_loop()
 {
     using namespace std::chrono;
@@ -1529,13 +1475,6 @@ void RDPAgent::clipboard_watch_loop()
 
 void RDPAgent::run_session()
 {
-    TlsConn *c = tls_connect(config.server_host, config.server_port, config.verify_cert);
-    if (!c)
-    {
-        log("tls_connect failed");
-        return;
-    }
-
     std::string codec, encoder, bitrate;
     int fps = 30, mq = 4;
     {
@@ -1547,6 +1486,16 @@ void RDPAgent::run_session()
         mq = runtime.mjpeg_q;
     }
     runtime.restart = false;
+
+    if (codec.empty())
+        return;
+
+    TlsConn *c = tls_connect(config.server_host, config.server_port, config.verify_cert);
+    if (!c)
+    {
+        log("tls_connect failed");
+        return;
+    }
 
     std::string ctype = (codec == "mjpeg") ? "video/x-motion-jpeg" : "video/h264";
     std::ostringstream req;
@@ -1782,8 +1731,6 @@ void RDPAgent::start()
     threads.emplace_back([this]()
                          { control_loop(); });
     threads.emplace_back([this]()
-                         { poll_config_loop(); });
-    threads.emplace_back([this]()
                          { resolution_watch_loop(); });
     threads.emplace_back([this]()
                          { clipboard_watch_loop(); });
@@ -1883,7 +1830,11 @@ bool RDPAgent::is_consent_exe_running()
 // ============ USER-SESSION WORKER ENTRYPOINT ============
 int run_rdp_worker(const std::string &host, int port,
                    const std::string &agent_id, bool verify_cert,
-                   int timeout_min, const std::string &shm_name)
+                   int timeout_min, const std::string &shm_name,
+                   const std::string &codec,
+                   const std::string &encoder,
+                   const std::string &bitrate,
+                   int fps, int mjpeg_q)
 {
     // Путь к ffmpeg: 1) рядом с exe, 2) через PATH
     char path[MAX_PATH] = {0};
@@ -1911,9 +1862,20 @@ int run_rdp_worker(const std::string &host, int port,
     cfg.ffmpeg_path = ffmpeg;
     cfg.timeout_min = timeout_min;
     cfg.shm_name = shm_name;
+    if (!codec.empty())
+        cfg.codec = codec;
+    if (!encoder.empty())
+        cfg.encoder = encoder;
+    if (!bitrate.empty())
+        cfg.bitrate = bitrate;
+    if (fps > 0)
+        cfg.framerate = fps;
+    if (mjpeg_q > 0)
+        cfg.mjpeg_q = mjpeg_q;
 
-    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s timeout=%d min shm=%s",
-         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str(), timeout_min, shm_name.c_str());
+    logf("run_rdp_worker: host=%s port=%d id=%s ffmpeg=%s timeout=%d min shm=%s codec=%s encoder=%s bitrate=%s fps=%d mjpeg_q=%d",
+         host.c_str(), port, agent_id.c_str(), ffmpeg.c_str(), timeout_min, shm_name.c_str(),
+         cfg.codec.c_str(), cfg.encoder.c_str(), cfg.bitrate.c_str(), cfg.framerate, cfg.mjpeg_q);
 
     RDPAgent agent(cfg);
     agent.start();

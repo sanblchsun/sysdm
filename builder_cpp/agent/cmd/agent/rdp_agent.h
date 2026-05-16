@@ -40,9 +40,9 @@ struct RDPConfig
     std::string agent_id = "agent1";
     bool verify_cert = true;
 
-    std::string codec = "mjpeg";
-    std::string encoder = "cpu";
-    std::string bitrate = "4M";
+    std::string codec;
+    std::string encoder;
+    std::string bitrate;
     int framerate = 30;
     int mjpeg_q = 4;
 
@@ -50,7 +50,6 @@ struct RDPConfig
     std::string input_fmt = "gdigrab";
     std::string input = "desktop";
     std::string video_size = "";
-    int config_poll_ms = 2000;
     int timeout_min = 30;
     std::string shm_name; // shared memory name for activity tracking
 };
@@ -123,6 +122,7 @@ public:
 private:
     RDPConfig config;
     RDPRuntime runtime;
+    std::string last_config_sig;
     std::vector<std::thread> threads;
     bool running = false;
 
@@ -144,9 +144,6 @@ private:
     // WebSocket (internal)
     static bool ws_send(TlsConn *c, int op, const void *data, size_t len);
     static std::string b64(const unsigned char *d, size_t n);
-
-    // HTTP
-    static std::string http_get(const std::string &host, int port, const std::string &path, bool verify_cert);
 
     // JSON (internal)
     static bool json_str_ex(const std::string &j, const std::string &k, std::string &out);
@@ -180,7 +177,6 @@ private:
 
     // Loops
     void control_loop();
-    void poll_config_loop();
     void resolution_watch_loop();
     void clipboard_watch_loop();
     void run_session();
@@ -200,6 +196,10 @@ private:
 int run_rdp_worker(const std::string &host, int port,
                    const std::string &agent_id, bool verify_cert,
                    int timeout_min = 30,
-                   const std::string &shm_name = "");
+                   const std::string &shm_name = "",
+                   const std::string &codec = "",
+                   const std::string &encoder = "",
+                   const std::string &bitrate = "",
+                   int fps = 0, int mjpeg_q = 0);
 
 #endif // RDP_AGENT_H

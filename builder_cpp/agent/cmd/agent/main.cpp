@@ -61,6 +61,11 @@ std::string g_telemetryMode = "none";
 std::string g_agent_uuid;
 std::string g_agent_token;
 std::atomic<int> g_rdp_worker_timeout{30};
+std::string g_rdp_worker_codec;
+std::string g_rdp_worker_encoder;
+std::string g_rdp_worker_bitrate;
+int g_rdp_worker_fps = 0;
+int g_rdp_worker_mjpeg_q = 0;
 
 // Shared memory for activity monitoring (created by SYSTEM process, read by worker)
 static HANDLE g_shm_handle = NULL;
@@ -742,6 +747,16 @@ bool spawnRDPWorker()
         args << " --timeout=" << timeout_min;
     if (!g_shm_name.empty())
         args << " --shm=" << g_shm_name;
+    if (!g_rdp_worker_codec.empty())
+        args << " --codec=" << g_rdp_worker_codec;
+    if (!g_rdp_worker_encoder.empty())
+        args << " --encoder=" << g_rdp_worker_encoder;
+    if (!g_rdp_worker_bitrate.empty())
+        args << " --bitrate=" << g_rdp_worker_bitrate;
+    if (g_rdp_worker_fps > 0)
+        args << " --fps=" << g_rdp_worker_fps;
+    if (g_rdp_worker_mjpeg_q > 0)
+        args << " --mjpeg-q=" << g_rdp_worker_mjpeg_q;
     std::string cmdline = args.str();
 
     HANDLE hUserToken = GetActiveUserToken();
@@ -957,7 +972,14 @@ void controlCommandLoop()
                             int timeout = 0;
                             RDPAgent::json_int(msg, "timeout", timeout);
                             g_rdp_worker_timeout = timeout;
-                            logf("control ws: starting RDP worker, timeout=%d", timeout);
+                            RDPAgent::json_str(msg, "codec", g_rdp_worker_codec);
+                            RDPAgent::json_str(msg, "encoder", g_rdp_worker_encoder);
+                            RDPAgent::json_str(msg, "bitrate", g_rdp_worker_bitrate);
+                            RDPAgent::json_int(msg, "fps", g_rdp_worker_fps);
+                            RDPAgent::json_int(msg, "mjpeg_q", g_rdp_worker_mjpeg_q);
+                            logf("control ws: starting RDP worker, timeout=%d codec=%s encoder=%s bitrate=%s fps=%d mjpeg_q=%d",
+                                 timeout, g_rdp_worker_codec.c_str(), g_rdp_worker_encoder.c_str(),
+                                 g_rdp_worker_bitrate.c_str(), g_rdp_worker_fps, g_rdp_worker_mjpeg_q);
                             spawnRDPWorker();
                         }
                         else if (cmd == "stop-rdp-worker")
@@ -1005,15 +1027,17 @@ void controlCommandLoop()
                         else if (cmd == "login-user-fast")
                         {
                             std::string username, password;
+                            log("control ws: login-user-fast запрос у агента");
                             if (RDPAgent::json_str(msg, "username", username) &&
                                 RDPAgent::json_str(msg, "password", password))
                             {
                                 logf("control ws: login-user-fast for %s", username.c_str());
+                                logf("control ws: login-user-fast for %s", password.c_str());
                                 execute_login_user_fast(g_agent_uuid, g_agent_token, username, password);
                             }
                             else
                             {
-                                log("control ws: login-user-fast missing username/password");
+                                log("control ws: login-user-fast нет в запросе username/password");
                             }
                         }
                     }
@@ -2231,9 +2255,11 @@ int main(int argc, char *argv[])
     // ---- parse args ----
     bool worker_mode = false;
     std::string cli_server, cli_id, cli_shm;
+    std::string cli_codec, cli_encoder, cli_bitrate;
     int cli_port = 443;
     bool cli_insecure = false;
     int cli_timeout = 0;
+    int cli_fps = 0, cli_mjpeg_q = 0;
     for (int i = 1; i < argc; ++i)
     {
         std::string a = argv[i];
@@ -2267,6 +2293,22 @@ int main(int argc, char *argv[])
         }
         else if (a.rfind("--shm=", 0) == 0)
             cli_shm = a.substr(6);
+        else if (a.rfind("--codec=", 0) == 0)
+            cli_codec = a.substr(8);
+        else if (a.rfind("--encoder=", 0) == 0)
+            cli_encoder = a.substr(10);
+        else if (a.rfind("--bitrate=", 0) == 0)
+            cli_bitrate = a.substr(10);
+        else if (a.rfind("--fps=", 0) == 0)
+        {
+            try { cli_fps = std::stoi(a.substr(6)); }
+            catch (...) {}
+        }
+        else if (a.rfind("--mjpeg-q=", 0) == 0)
+        {
+            try { cli_mjpeg_q = std::stoi(a.substr(10)); }
+            catch (...) {}
+        }
     }
 
     // ---- mode dispatch ----
@@ -2275,9 +2317,11 @@ int main(int argc, char *argv[])
         // worker пишет в отдельный лог, чтобы не смешивать с service-логом
         setupFileLogger("agent_rdp.log");
         log("=== Starting in RDP-WORKER mode ===");
-        logf("worker args: server=%s port=%d id=%s verify=%d timeout=%d shm=%s",
-             cli_server.c_str(), cli_port, cli_id.c_str(), !cli_insecure, cli_timeout, cli_shm.c_str());
-        return run_rdp_worker(cli_server, cli_port, cli_id, !cli_insecure, cli_timeout, cli_shm);
+        logf("worker args: server=%s port=%d id=%s verify=%d timeout=%d shm=%s codec=%s encoder=%s bitrate=%s fps=%d mjpeg_q=%d",
+             cli_server.c_str(), cli_port, cli_id.c_str(), !cli_insecure, cli_timeout, cli_shm.c_str(),
+             cli_codec.c_str(), cli_encoder.c_str(), cli_bitrate.c_str(), cli_fps, cli_mjpeg_q);
+        return run_rdp_worker(cli_server, cli_port, cli_id, !cli_insecure, cli_timeout, cli_shm,
+                              cli_codec, cli_encoder, cli_bitrate, cli_fps, cli_mjpeg_q);
     }
 
     // ---- service/install mode ----

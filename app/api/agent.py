@@ -484,6 +484,11 @@ async def start_rdp(
         "type": "command",
         "cmd": "start-rdp-worker",
         "timeout": timeout,
+        "codec": relay_agent.codec_target,
+        "encoder": relay_agent.encoder_target,
+        "bitrate": relay_agent.bitrate_target,
+        "fps": relay_agent.fps_target,
+        "mjpeg_q": relay_agent.mjpeg_q_target,
     }
     agent_connected = await send_command_to_agent(agent.uuid, command)
 
@@ -642,8 +647,12 @@ async def login_session_fast(
         "username": data.username,
         "password": data.password,
     }
-    await send_command_to_agent(agent.uuid, command)
-    logger.info(f"[login-session-fast] Published for agent {agent.uuid}: {data.username}")
+    agent_connected = await send_command_to_agent(agent.uuid, command)
+    if not agent_connected:
+        message = "Agent is not currently connected via WebSocket"
+        logger.warning(f"[login-session-fast] Agent {agent.uuid} not connected")
+    else:
+        logger.info(f"[login-session-fast] Published for agent {agent.uuid}: {data.username}")
 
     return {"status": "ok", "message": f"Fast login command queued for {data.username}"}
 
@@ -669,7 +678,7 @@ async def pending_command(
         
         command_json = await r.lpop(pending_key)  # type: ignore[misc]
         if command_json:
-            command = json.loads(command_json)
+            command = json.loads(command_json)  # type: ignore[arg-type]
             logger.warning(f"[pending-command] *** FOUND COMMAND in queue {pending_key}: {command}")
             return command
         else:

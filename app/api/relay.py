@@ -658,6 +658,23 @@ async def set_config(aid: str, body: RelayConfigBody):
             await a.persist_config(changed)
         except Exception as e:
             logger.warning(f"[relay] redis persist failed for {aid}: {e}")
+        # Push config to running worker via WebSocket
+        try:
+            ws = HUB.worker_ws.get(aid)
+            if ws:
+                config_msg = json.dumps({
+                    "type": "config",
+                    "codec": a.codec_target,
+                    "encoder": a.encoder_target,
+                    "bitrate": a.bitrate_target,
+                    "fps": a.fps_target,
+                    "mjpeg_q": a.mjpeg_q_target,
+                    "rdp_timeout": a.rdp_timeout_target,
+                })
+                await ws.send_text(config_msg)
+                logger.info(f"[relay] config pushed to worker {aid}")
+        except Exception as e:
+            logger.warning(f"[relay] failed to push config to worker {aid}: {e}")
     return {
         "status": "ok",
         "target": {
