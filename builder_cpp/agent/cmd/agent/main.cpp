@@ -1157,9 +1157,6 @@ static void clear_autoadmin_logon();
 static int wait_for_new_session(const std::string &expected_user, int timeout_sec);
 static bool enable_shutdown_privilege();
 static bool json_extract_str(const std::string &body, const std::string &key, std::string &out);
-static void report_command_result(const std::string &uuid, const std::string &token,
-                                   const std::string &cmd_type, bool success,
-                                   const std::string &message);
 
 void mainLogic()
 {
@@ -1464,18 +1461,6 @@ static void recover_pending_login_state()
     // Clear AutoAdminLogon regardless
     clear_autoadmin_logon();
 
-    if (newSessionId >= 0)
-    {
-        if (!uuid.empty() && !token.empty())
-            report_command_result(uuid, token, "login-user", true, "Switched via reboot to " + username);
-    }
-    else
-    {
-        if (!uuid.empty() && !token.empty())
-            report_command_result(uuid, token, "login-user", false,
-                                  "Reboot done but timed out waiting for user: " + username);
-    }
-
     DeleteFileA(path.c_str());
 }
 
@@ -1568,18 +1553,6 @@ static void clear_autoadmin_logon()
     RegCloseKey(hKey);
 }
 
-static void report_command_result(const std::string &uuid, const std::string &token,
-                                   const std::string &cmd_type, bool success,
-                                   const std::string &message)
-{
-    std::string url = serverURL + "/api/agent/command-result?uuid=" + uuid + "&token=" + token;
-    std::string body = "{\"command_type\":\"" + cmd_type + "\","
-                        "\"success\":" + (success ? "true" : "false") + ","
-                        "\"message\":\"" + jsonEscape(message) + "\"}";
-    std::string dummy;
-    int code;
-    postJSON(url, body, dummy, code);
-}
 
 // Enable SE_SHUTDOWN_NAME privilege for ExitWindowsEx
 static bool enable_shutdown_privilege()
@@ -1715,7 +1688,6 @@ static bool execute_login_user(const std::string &uuid, const std::string &token
     // 3. Set AutoAdminLogon
     if (!set_autoadmin_logon(uname, domain, password))
     {
-        report_command_result(uuid, token, "login-user", false, "Failed to set AutoAdminLogon");
         return false;
     }
 
@@ -1727,18 +1699,14 @@ static bool execute_login_user(const std::string &uuid, const std::string &token
     {
         clear_autoadmin_logon();
         clear_pending_login_state();
-        report_command_result(uuid, token, "login-user", false, "Failed to enable shutdown privilege");
         return false;
     }
 
     if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCE,
                         SHTDN_REASON_MAJOR_OPERATINGSYSTEM | SHTDN_REASON_MINOR_RECONFIG))
     {
-        DWORD err = GetLastError();
         clear_autoadmin_logon();
         clear_pending_login_state();
-        report_command_result(uuid, token, "login-user", false,
-                              "Reboot failed: " + std::to_string(err));
         return false;
     }
 
@@ -1789,7 +1757,6 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
     // 3. Set AutoAdminLogon
     if (!set_autoadmin_logon(uname, domain, password))
     {
-        report_command_result(uuid, token, "login-user-fast", false, "Failed to set AutoAdminLogon");
         return false;
     }
 
@@ -1798,7 +1765,6 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
     if (activeSessionId == 0xFFFFFFFF)
     {
         clear_autoadmin_logon();
-        report_command_result(uuid, token, "login-user-fast", false, "No active console session");
         return false;
     }
 
@@ -1807,11 +1773,8 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
     //    Use bWait=TRUE to ensure logoff completes before we start polling.
     if (!WTSLogoffSession(WTS_CURRENT_SERVER_HANDLE, activeSessionId, TRUE))
     {
-        DWORD err = GetLastError();
         clear_autoadmin_logon();
         clear_pending_login_state();
-        report_command_result(uuid, token, "login-user-fast", false,
-                              "WTSLogoffSession failed: " + std::to_string(err));
         return false;
     }
 
@@ -1824,13 +1787,10 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
     if (newSessionId < 0)
     {
         clear_pending_login_state();
-        report_command_result(uuid, token, "login-user-fast", false,
-                              "Timed out waiting for user login after logoff");
         return false;
     }
 
     clear_pending_login_state();
-    report_command_result(uuid, token, "login-user-fast", true, "Switched via fast logoff to " + uname);
     return true;
 }
 
@@ -1875,8 +1835,6 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
                 if (!json_extract_str(resp, "username", username) ||
                     !json_extract_str(resp, "password", password))
                 {
-                    report_command_result(uuid, token, "login-user", false,
-                                          "Missing username/password in response");
                     continue;
                 }
                 execute_login_user(uuid, token, username, password);
@@ -1887,8 +1845,6 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
                 if (!json_extract_str(resp, "username", username) ||
                     !json_extract_str(resp, "password", password))
                 {
-                    report_command_result(uuid, token, "login-user-fast", false,
-                                          "Missing username/password in response");
                     continue;
                 }
                 execute_login_user_fast(uuid, token, username, password);
@@ -1900,8 +1856,6 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
             if (!json_extract_str(resp, "username", username) ||
                 !json_extract_str(resp, "password", password))
             {
-                report_command_result(uuid, token, "login-user", false,
-                                      "Missing username/password in response");
                 continue;
             }
 
@@ -1913,8 +1867,6 @@ static void pending_commands_poll_thread(const std::string &uuid, const std::str
             if (!json_extract_str(resp, "username", username) ||
                 !json_extract_str(resp, "password", password))
             {
-                report_command_result(uuid, token, "login-user-fast", false,
-                                      "Missing username/password in response");
                 continue;
             }
 

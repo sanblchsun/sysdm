@@ -26,6 +26,7 @@ REDIS_AGENT_KEY = "agent:config:{aid}"
 REDIS_AGENT_TTL = 86400
 REDIS_HELLO_KEY = "agent:hello:{aid}"
 REDIS_WORKER_KEY = "agent:worker:{aid}"
+REDIS_AGENT_CONFIG_CHANNEL = "agent:config"
 
 WORKER_ID = os.environ.get("HOSTNAME", f"worker-{os.getpid()}")
 
@@ -628,6 +629,36 @@ async def get_config(aid: str):
     )
 
 
+def _build_agent_status_dict(a) -> dict:
+    now = time.time()
+    alive = a.updated > 0 and (now - a.updated) < 30.0
+    ctrl_local = a.aid in HUB.agent_ws
+    return {
+        "id": a.aid,
+        "alive": alive,
+        "elapsed": round(now - a.updated, 1) if a.updated > 0 else 999.0,
+        "uptime_s": round(now - a.started, 1),
+        "mjpeg_frames": a.mjpeg_total_count,
+        "h264_keyframes": a.h264_total_count,
+        "h264_viewers": len(a.h264_subscribers),
+        "ctrl_connected": ctrl_local,
+        "target": {
+            "codec": a.codec_target,
+            "encoder": a.encoder_target,
+            "bitrate": a.bitrate_target,
+            "fps": a.fps_target,
+            "mjpeg_q": a.mjpeg_q_target,
+            "rdp_timeout": a.rdp_timeout_target,
+        },
+        "current": {
+            "codec": a.codec_current,
+            "encoder": a.encoder_current,
+            "bitrate": a.bitrate_current,
+            "fps": a.fps_current,
+        },
+    }
+
+
 @router.post("/agents/{aid}/config")
 async def set_config(aid: str, body: RelayConfigBody):
     a = await get_agent(aid)
@@ -668,6 +699,11 @@ async def set_config(aid: str, body: RelayConfigBody):
                     "rdp_timeout": a.rdp_timeout_target,
                 })
                 await ws.send_text(config_msg)
+        except Exception:
+            pass
+        try:
+            r = await get_redis()
+            await r.publish(REDIS_AGENT_CONFIG_CHANNEL, json.dumps(_build_agent_status_dict(a)))
         except Exception:
             pass
     return {
@@ -913,9 +949,32 @@ async def ws_agent_status_sync(websocket: WebSocket):
         await pubsub.close()
 
 
-@router.get("/healthz")
-async def healthz():
-    return {"ok": True, "agents": len(AGENTS)}
+@router.websocket("/ws/agent-config-sync")
+async def ws_agent_config_sync(websocket: WebSocket):
+    """WebSocket for real-time agent config/status updates for the RDP dashboard"""
+    await websocket.accept()
+    r = await get_redis()
+    pubsub = r.pubsub()
+    try:
+        await pubsub.subscribe(REDIS_AGENT_CONFIG_CHANNEL)
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                try:
+                    data = message["data"]
+                    if isinstance(data, bytes):
+                        data = data.decode()
+                    await websocket.send_text(data)
+                except Exception:
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await pubsub.unsubscribe(REDIS_AGENT_CONFIG_CHANNEL)
+        await pubsub.close()
+
+
 
 
 # compat_router удалён. Старые пути без /relay/ префикса

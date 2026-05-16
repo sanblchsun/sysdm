@@ -17,7 +17,7 @@ from app.schemas.agent import (
     AgentTelemetryIn,
     AgentUACControl,
     LoginSessionIn,
-    CommandResultIn,
+
 )
 from sqlalchemy import select, update
 from app.schemas.agent_update import (
@@ -46,21 +46,12 @@ def get_limiter():
 # Results are stored in queue for agent to poll
 # NOTE: Channel must match relay.py: ctrl:to:{uuid} for main process
 REDIS_COMMAND_CHANNEL = "ctrl:to:{uuid}"
-REDIS_PENDING_RESULT_KEY = "pending_result:{uuid}"
-REDIS_PENDING_TTL = 300
 
 async def _publish_command(uuid: str, command: dict):
     """Publish command to main agent process via Redis Pub/Sub (immediate delivery, not polled)"""
     r = await get_redis()
     channel = REDIS_COMMAND_CHANNEL.format(uuid=uuid)
     await r.publish(channel, json.dumps(command))  # type: ignore[misc]
-
-async def _push_command_result(uuid: str, data: dict):
-    """Store command result in queue for agent to poll"""
-    r = await get_redis()
-    key = REDIS_PENDING_RESULT_KEY.format(uuid=uuid)
-    await r.rpush(key, json.dumps(data))  # type: ignore[misc]
-    await r.expire(key, REDIS_PENDING_TTL)
 
 # ==================== AGENT STATUS (Redis Pub/Sub) ====================
 REDIS_AGENT_STATUS_CHANNEL = "agent:status"
@@ -482,36 +473,6 @@ async def start_rdp(
     }
 
 
-@router.post("/{agent_id}/stop-rdp")
-async def stop_rdp(
-    agent_id: int,
-    session: AsyncSession = Depends(get_db),
-):
-    """Stop RDP worker - deliver via both Redis Pub/Sub (real-time) and pending queue (fallback)"""
-    agent = await session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    command = {
-        "type": "command",
-        "cmd": "stop-rdp-worker",
-    }
-    
-    await _publish_command(agent.uuid, command)
-
-    from app.redis_client import get_redis
-    r = await get_redis()
-    
-    pending_key = f"pending_cmd:{agent.uuid}"
-    await r.rpush(pending_key, json.dumps(command))  # type: ignore[misc]
-    await r.expire(pending_key, 600)
-
-    return {
-        "status": "ok",
-        "message": "RDP stop command sent via Pub/Sub and queued for main process",
-    }
-
-
 @router.post("/stop-rdp-by-uuid/{uuid}")
 async def stop_rdp_by_uuid(
     uuid: str,
@@ -619,13 +580,4 @@ async def pending_command(
     return {"type": None}
 
 
-@router.post("/command-result")
-async def command_result(
-    uuid: str,
-    token: str,
-    data: CommandResultIn,
-    _=Depends(get_agent_by_token),
-):
-    """Agent reports result of executing a pending command"""
-    await _push_command_result(uuid, data.model_dump())
-    return {"status": "ok"}
+

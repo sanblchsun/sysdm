@@ -62,7 +62,4 @@ class PendingCommandOut(BaseModel):
     data: dict | None = None
 
 
-class CommandResultIn(BaseModel):
-    command_type: str
-    success: bool
-    message: str = ""
+

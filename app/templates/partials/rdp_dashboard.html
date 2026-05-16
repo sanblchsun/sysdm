@@ -177,6 +177,26 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+
+      function connectDashboardSync() {
+        const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        const ws = new WebSocket(`${protocol}//${location.host}/relay/ws/agent-config-sync`);
+        ws.onmessage = function (e) {
+          try {
+            const a = JSON.parse(e.data);
+            const targetAgent = new URLSearchParams(location.search).get("agent");
+            if (targetAgent && a.id !== targetAgent) return;
+            const c = cards.get(a.id);
+            if (c) {
+              updateCard(c, a);
+            }
+          } catch (_) {}
+        };
+        ws.onclose = function () {
+          setTimeout(connectDashboardSync, 3000);
+        };
+      }
+      connectDashboardSync();
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
       }
@@ -396,7 +416,7 @@
         }
       }
       refresh();
-      setInterval(refresh, 2000);
+      setInterval(refresh, 30000);
 
       // ========= CLEANUP ON PAGE CLOSE =========
       // When dashboard is closed, stop all active RDP streams
