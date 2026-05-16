@@ -11,6 +11,8 @@ docker-compose up -d
 
 python -m builder_cpp.build_agents
 python builder_cpp/build_setup.py 
+python create_admin.py 
+
 
 
 alembic revision --autogenerate -m "описание"
