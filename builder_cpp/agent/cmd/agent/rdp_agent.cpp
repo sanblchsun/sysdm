@@ -1091,13 +1091,12 @@ void RDPAgent::handle_control(const std::string &j)
     if (!json_str(j, "type", type))
         return;
 
-    // Update activity timestamp for any input event
-    if (type == "mouse_move" || type == "mouse_down" || type == "mouse_up" ||
-        type == "mouse_wheel" || type == "text" || type == "key_down" ||
+    // Update activity timestamp (mouse_move excluded — too frequent, unnecessary for inactivity detection)
+    if (type == "mouse_down" || type == "mouse_up" ||
+        type == "text" || type == "key_down" ||
         type == "key_up" || type == "clipboard")
     {
         runtime.last_activity_time = std::chrono::steady_clock::now();
-        // Write to shared memory so main process (SYSTEM) can detect inactivity
         if (shm)
             shm->last_activity_time = GetTickCount64();
     }
