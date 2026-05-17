@@ -122,14 +122,14 @@ window.addEventListener("DOMContentLoaded", () => {
   verticalSplitter.addEventListener("touchstart", (e) => {
     draggingV = true;
     e.preventDefault();
-  });
+  }, { passive: false });
 
   horizontalSplitter.addEventListener("touchstart", (e) => {
     draggingH = true;
     dragStartedH = false;
     startY = e.touches[0].clientY;
     e.preventDefault();
-  });
+  }, { passive: false });
 
   document.addEventListener("touchmove", (e) => {
     const touch = e.touches[0];

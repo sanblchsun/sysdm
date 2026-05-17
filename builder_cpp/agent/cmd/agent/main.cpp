@@ -279,59 +279,116 @@ std::string getExternalIP()
     return result;
 }
 
+std::string getUsersFromRegistry()
+{
+    HKEY hKey = NULL;
+    LONG result = RegOpenKeyExA(
+        HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList",
+        0,
+        KEY_READ,
+        &hKey);
+
+    if (result != ERROR_SUCCESS)
+        return "";
+
+    std::vector<std::string> users;
+    char subKeyName[256];
+    DWORD subKeySize;
+    BYTE valueData[4096];
+    DWORD valueDataSize;
+    DWORD index = 0;
+
+    while (true)
+    {
+        subKeySize = sizeof(subKeyName);
+        result = RegEnumKeyExA(hKey, index++, subKeyName, &subKeySize, NULL, NULL, NULL, NULL);
+        if (result != ERROR_SUCCESS)
+            break;
+
+        // Skip well-known system SIDs
+        std::string sid(subKeyName, subKeySize);
+        if (sid == "S-1-5-18" || sid == "S-1-5-19" || sid == "S-1-5-20")
+            continue;
+
+        HKEY hSubKey = NULL;
+        result = RegOpenKeyExA(hKey, subKeyName, 0, KEY_READ, &hSubKey);
+        if (result != ERROR_SUCCESS)
+            continue;
+
+        valueDataSize = sizeof(valueData);
+        DWORD type = 0;
+        result = RegQueryValueExA(hSubKey, "ProfileImagePath", NULL, &type, valueData, &valueDataSize);
+        if (result != ERROR_SUCCESS)
+        {
+            RegCloseKey(hSubKey);
+            continue;
+        }
+        RegCloseKey(hSubKey);
+
+        if (type != REG_EXPAND_SZ && type != REG_SZ)
+            continue;
+
+        if (valueDataSize >= sizeof(valueData))
+            valueData[sizeof(valueData) - 1] = 0;
+        else
+            valueData[valueDataSize] = 0;
+
+        // Expand environment variables (%SystemDrive% etc.)
+        std::string path;
+        if (type == REG_EXPAND_SZ && strstr((char *)valueData, "%") != NULL)
+        {
+            char expanded[4096];
+            DWORD expandedSize = ExpandEnvironmentStringsA((char *)valueData, expanded, sizeof(expanded));
+            if (expandedSize > 0 && expandedSize < sizeof(expanded))
+                path = expanded;
+            else
+                path = (char *)valueData;
+        }
+        else
+        {
+            path = (char *)valueData;
+        }
+
+        // Extract username from profile path (last component after backslash)
+        size_t pos = path.find_last_of("\\");
+        if (pos == std::string::npos)
+            continue;
+
+        std::string username = path.substr(pos + 1);
+        if (username.empty())
+            continue;
+
+        // Skip built-in / system profile folders
+        std::string lower = username;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "administrator" || lower == "guest" || lower == "default" ||
+            lower == "public" || lower == "defaultuser0" || lower == "defaultaccount" ||
+            lower == "all users")
+            continue;
+
+        // Skip duplicates
+        if (std::find(users.begin(), users.end(), username) != users.end())
+            continue;
+
+        users.push_back(username);
+    }
+
+    RegCloseKey(hKey);
+
+    std::string result_str;
+    for (size_t i = 0; i < users.size(); i++)
+    {
+        if (i > 0)
+            result_str += ", ";
+        result_str += users[i];
+    }
+    return result_str;
+}
+
 std::string getUsersAsString()
 {
-    std::string psCommand = "$OutputEncoding = [console]::InputEncoding = [console]::OutputEncoding = "
-                            "New-Object System.Text.UTF8Encoding; "
-                            "Get-LocalUser | Where-Object { $_.Enabled -eq $true } | ForEach-Object { $_.Name }";
-    STARTUPINFOA si = {0};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    SECURITY_ATTRIBUTES sa = {0};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-    HANDLE hRead, hWrite;
-    CreatePipe(&hRead, &hWrite, &sa, 0);
-    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
-    std::string cmdLine = "powershell.exe -Command \"" + psCommand + "\"";
-    PROCESS_INFORMATION pi = {0};
-    char *cmd = _strdup(cmdLine.c_str());
-    if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
-    {
-        free(cmd);
-        CloseHandle(hRead);
-        CloseHandle(hWrite);
-        return "";
-    }
-    free(cmd);
-    CloseHandle(hWrite);
-    char buffer[4096];
-    DWORD bytesRead;
-    std::string output;
-    while (ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0)
-    {
-        buffer[bytesRead] = 0;
-        output += buffer;
-    }
-    CloseHandle(hRead);
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    std::string users;
-    std::istringstream iss(output);
-    std::string line;
-    while (std::getline(iss, line))
-    {
-        line = line.substr(0, line.find_last_not_of(" \n\r\t") + 1);
-        if (!line.empty() && line != "Administrator" && line != "Guest")
-        {
-            if (!users.empty())
-                users += ", ";
-            users += line;
-        }
-    }
-    return users;
+    return getUsersFromRegistry();
 }
 
 std::string jsonEscape(const std::string &s)
@@ -1179,12 +1236,17 @@ void mainLogic()
         if (g_stopRequested)
             return;
         std::string url = serverURL + "/api/agent/register";
+        TelemetryData td = collectTelemetry();
         std::string body = "{\"name_pc\":\"" + jsonEscape(std::string(hostname)) + "\","
-                                                                                   "\"machine_uid\":\"" +
+                                                                                    "\"machine_uid\":\"" +
                            jsonEscape(machineUID) + "\","
-                                                    "\"exe_version\":\"" +
+                                                     "\"system\":\"" +
+                           td.system + "\","
+                                       "\"user_name\":\"" +
+                           jsonEscape(td.userName) + "\","
+                                                      "\"exe_version\":\"" +
                            jsonEscape(buildSlug) + "\","
-                                                   "\"external_ip\":\"" +
+                                                    "\"external_ip\":\"" +
                            jsonEscape(getExternalIP()) + "\"}";
         std::string responseBody;
         int statusCode = 0;
@@ -1219,21 +1281,21 @@ void mainLogic()
     // === INITIAL TELEMETRY ===
     {
         TelemetryData t = collectTelemetry();
-        std::string tb = "{\"system\":\"" + buildSlug + "\","
-                                                        "\"user_name\":\"" +
-                         jsonEscape(t.userName) + "\","
-                                                  "\"ip_addr\":\"" +
-                         t.ipAddr + "\","
-                                    "\"external_ip\":\"" +
-                         t.externalIP + "\","
-                                        "\"total_memory\":" +
-                         std::to_string(t.totalMemory) + ","
-                                                         "\"available_memory\":" +
-                         std::to_string(t.availableMemory) + ","
-                                                             "\"exe_version\":\"" +
-                         buildSlug + "\"}";
         std::string rb;
         int rc;
+        std::string tb = "{\"system\":\"" + t.system + "\","
+                                                        "\"user_name\":\"" +
+                         jsonEscape(t.userName) + "\","
+                                                   "\"ip_addr\":\"" +
+                         t.ipAddr + "\","
+                                     "\"external_ip\":\"" +
+                         t.externalIP + "\","
+                                         "\"total_memory\":" +
+                         std::to_string(t.totalMemory) + ","
+                                                          "\"available_memory\":" +
+                         std::to_string(t.availableMemory) + ","
+                                                              "\"exe_version\":\"" +
+                         buildSlug + "\"}";
         postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token, tb, rb, rc);
     }
 
@@ -1285,19 +1347,19 @@ void mainLogic()
         if (g_telemetryMode == "full" && !g_stopRequested)
         {
             TelemetryData t = collectTelemetry();
-            std::string tb = "{\"system\":\"" + buildSlug + "\","
-                                                            "\"user_name\":\"" +
-                             jsonEscape(t.userName) + "\","
-                                                      "\"ip_addr\":\"" +
-                             t.ipAddr + "\","
-                                        "\"external_ip\":\"" +
-                             t.externalIP + "\","
-                                            "\"total_memory\":" +
-                             std::to_string(t.totalMemory) + ","
-                                                             "\"available_memory\":" +
-                             std::to_string(t.availableMemory) + ","
-                                                                 "\"exe_version\":\"" +
-                             buildSlug + "\"}";
+            std::string tb = "{\"system\":\"" + t.system + "\","
+                                                           "\"user_name\":\"" +
+                              jsonEscape(t.userName) + "\","
+                                                       "\"ip_addr\":\"" +
+                              t.ipAddr + "\","
+                                         "\"external_ip\":\"" +
+                              t.externalIP + "\","
+                                             "\"total_memory\":" +
+                              std::to_string(t.totalMemory) + ","
+                                                              "\"available_memory\":" +
+                              std::to_string(t.availableMemory) + ","
+                                                                  "\"exe_version\":\"" +
+                              buildSlug + "\"}";
             postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token,
                      tb, dummy, code);
         }

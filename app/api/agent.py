@@ -241,6 +241,14 @@ async def agent_heartbeat(
     if last_seen and last_seen.tzinfo is None:
         last_seen = last_seen.replace(tzinfo=timezone.utc)
 
+    # Trigger full telemetry if user_name is missing (for existing agents)
+    result = await session.execute(
+        select(AgentAdditionalData).where(AgentAdditionalData.agent_id == agent.id)
+    )
+    additional = result.scalars().first()
+    needs_telemetry = additional is None or not additional.user_name
+    telemetry_mode = "full" if needs_telemetry else agent.telemetry_mode
+
     # Обновляем last_seen не чаще чем раз в UPDATE_INTERVAL секунд
     if not agent.last_seen or now - last_seen > UPDATE_INTERVAL:
         await session.execute(
@@ -255,6 +263,7 @@ async def agent_heartbeat(
             "status": "ok",
             "agent_uuid": agent.uuid,
             "last_seen": now,
+            "telemetry_mode": telemetry_mode,
         }
 
     # Publish agent online status even if DB not updated (for responsive UI)
@@ -265,7 +274,7 @@ async def agent_heartbeat(
         "status": "ok",
         "agent_uuid": agent.uuid,
         "last_seen": agent.last_seen,
-        "telemetry_mode": agent.telemetry_mode,  # Tell agent what to send
+        "telemetry_mode": telemetry_mode,
     }
 
 

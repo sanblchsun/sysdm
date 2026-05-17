@@ -110,12 +110,17 @@ async def top_panel(
             last_seen = last_seen.replace(tzinfo=timezone.utc)
         is_online = last_seen is not None and (now - last_seen) < OFFLINE_AFTER
 
+        # Fallback: if system was accidentally set to buildSlug instead of "windows"
+        system = row.system
+        if system and row.exe_version and system == row.exe_version:
+            system = "windows"
+
         agents.append(
             {
                 "id": row.id,
                 "uuid": row.uuid,
                 "name_pc": row.name_pc,
-                "system": row.system,
+                "system": system,
                 "user_name": row.user_name,
                 "ip_addr": row.ip_addr,
                 "external_ip": row.external_ip,  # <-- добавили внешний IP
