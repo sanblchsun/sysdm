@@ -423,30 +423,25 @@
       refresh();
       setInterval(refresh, 30000);
 
-      // ========= F5-SAFE WORKER LIFECYCLE =========
+      // ========= HEARTBEAT WORKER LIFECYCLE =========
       const agentUuid = new URLSearchParams(location.search).get("agent");
 
-      console.log("[lifecycle] agentUuid =", agentUuid);
-
-      function sendStop() {
-        console.log("[lifecycle] sendStop", agentUuid);
-        if (!agentUuid) return;
-        navigator.sendBeacon(
-          "/api/agent/prepare-stop-rdp?uuid=" + encodeURIComponent(agentUuid),
-          new Blob(['{"from":"pagehide"}'], { type: "application/json" }),
-        );
-      }
-
-      window.addEventListener("pagehide", sendStop);
-      window.addEventListener("beforeunload", sendStop);
-
       if (agentUuid) {
-        fetch("/api/agent/renew-lease?uuid=" + encodeURIComponent(agentUuid), {
+        // Register with server — server will stop worker if heartbeats stop
+        fetch("/api/agent/watch-agent?uuid=" + encodeURIComponent(agentUuid), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: "{}",
-          keepalive: true,
         });
+
+        // Send heartbeat every 3s to keep worker alive
+        setInterval(function () {
+          fetch("/api/agent/agent-heartbeat?uuid=" + encodeURIComponent(agentUuid), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+        }, 3000);
       }
     </script>
   </body>

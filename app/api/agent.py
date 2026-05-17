@@ -507,68 +507,57 @@ async def stop_rdp_by_uuid(
     }
 
 
-# ==================== DEBOUNCED STOP-RDP (F5-safe) ====================
+# ==================== HEARTBEAT-BASED WORKER LIFECYCLE ====================
 import asyncio
 
-_pending_deadlines: dict[str, datetime] = {}  # uuid → deadline for pending stop
-_last_page_load: dict[str, datetime] = {}     # uuid → time of last renew-lease
-_last_prepare: dict[str, datetime] = {}       # uuid → time of last prepare-stop-rdp
+_watched_agents: dict[str, datetime] = {}  # uuid → last heartbeat time
+_heartbeat_task: asyncio.Task | None = None
 
 
-async def _watchdog(uuid: str) -> None:
-    """Sleep until deadline passes. Check if page reloaded since last prepare."""
-    while True:
-        deadline = _pending_deadlines.get(uuid)
-        if not deadline:
-            return
-        remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
-        if remaining <= 0:
-            break
-        await asyncio.sleep(remaining)
-    _pending_deadlines.pop(uuid, None)
-    last_page_load = _last_page_load.get(uuid)
-    last_prepare = _last_prepare.get(uuid)
-    _last_page_load.pop(uuid, None)
-    _last_prepare.pop(uuid, None)
-    # If page loaded AFTER the last prepare → it was F5, keep alive
-    if last_page_load and last_prepare and last_page_load > last_prepare:
-        return
-    # Page is gone, stop the worker
+async def _stop_worker(uuid: str):
     command = {"type": "command", "cmd": "stop-rdp-worker"}
     await _publish_command(uuid, command)
     r = await get_redis()
     pending_key = f"pending_cmd:{uuid}"
     await r.rpush(pending_key, json.dumps(command))  # type: ignore[misc]
-    await r.expire(pending_key, 600)  # type: ignore[misc]
+    await r.expire(pending_key, 600)
 
 
-@router.post("/prepare-stop-rdp")
-async def prepare_stop_rdp(uuid: str):
-    """Schedule or extend stop-rdp timer (3s from this call)."""
-    logger.info(f"[prepare-stop-rdp] RECEIVED uuid={uuid}")
-    now = datetime.now(timezone.utc)
-    first = uuid not in _pending_deadlines
-    if first:
-        _last_prepare[uuid] = now  # record only the FIRST unload
-    _pending_deadlines[uuid] = now + timedelta(seconds=3)
-    if first:
-        asyncio.create_task(_watchdog(uuid))
+async def _heartbeat_checker():
+    """Every 5s check all watched agents. If heartbeat >7s old → stop worker."""
+    while True:
+        await asyncio.sleep(5)
+        now = datetime.now(timezone.utc)
+        dead = [uuid for uuid, last in _watched_agents.items()
+                if (now - last).total_seconds() > 7]
+        for uuid in dead:
+            try:
+                del _watched_agents[uuid]
+                logger.info(f"[heartbeat] agent {uuid} heartbeat expired, stopping worker")
+                await _stop_worker(uuid)
+            except Exception:
+                logger.exception(f"[heartbeat] failed to stop worker for {uuid}")
+
+
+def _ensure_heartbeat():
+    global _heartbeat_task
+    if _heartbeat_task is None:
+        _heartbeat_task = asyncio.create_task(_heartbeat_checker())
+
+
+@router.post("/watch-agent")
+async def watch_agent(uuid: str):
+    """Dashboard starts watching this agent. Server will stop worker if heartbeat dies."""
+    _ensure_heartbeat()
+    _watched_agents[uuid] = datetime.now(timezone.utc)
+    logger.info(f"[watch-agent] watching uuid={uuid}")
     return {"status": "ok"}
 
 
-@router.post("/renew-lease")
-async def renew_lease(uuid: str):
-    """Called on every page load. Newer timestamp means F5, not tab close."""
-    logger.info(f"[renew-lease] RECEIVED uuid={uuid}")
-    _last_page_load[uuid] = datetime.now(timezone.utc)
-    return {"status": "ok"}
-
-
-@router.post("/renew-lease")
-async def renew_lease(uuid: str):
-    """Renew page lease (called on every page load). Lease lasts 15s."""
-    logger.info(f"[renew-lease] RECEIVED uuid={uuid}")
-    _page_leases[uuid] = datetime.now(timezone.utc) + timedelta(seconds=15)
+@router.post("/agent-heartbeat")
+async def agent_heartbeat(uuid: str):
+    """Periodic heartbeat from dashboard. Must arrive every <7s to keep worker alive."""
+    _watched_agents[uuid] = datetime.now(timezone.utc)
     return {"status": "ok"}
 
 
