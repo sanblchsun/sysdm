@@ -228,7 +228,7 @@ async def agent_telemetry(
 
 
 @router.post("/heartbeat")
-async def agent_heartbeat(
+async def heartbeat(
     uuid: str,
     token: str,
     agent: Agent = Depends(get_agent_by_token),
