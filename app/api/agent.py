@@ -1,6 +1,6 @@
 # app/api/agent.py
 from pathlib import Path
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from loguru import logger
 import os
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -487,7 +487,7 @@ async def stop_rdp_by_uuid(
     uuid: str,
     session: AsyncSession = Depends(get_db),
 ):
-    """Stop RDP worker by agent UUID (used by dashboard on page close)"""
+    """Stop RDP worker by agent UUID"""
     result = await session.execute(
         select(Agent).where(Agent.uuid == uuid)
     )
@@ -496,56 +496,41 @@ async def stop_rdp_by_uuid(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    command = {
-        "type": "command",
-        "cmd": "stop-rdp-worker",
-    }
-    
-    await _publish_command(agent.uuid, command)
-
-    from app.redis_client import get_redis
-    r = await get_redis()
-    
-    pending_key = f"pending_cmd:{agent.uuid}"
-    await r.rpush(pending_key, json.dumps(command))  # type: ignore[misc]
-    await r.expire(pending_key, 600)
+    await _stop_worker(agent.uuid)
 
     return {
         "status": "ok",
-        "message": "RDP stop command sent via Pub/Sub and queued for main process",
+        "message": "RDP stop command sent to agent",
     }
 
 
-# ==================== HEARTBEAT-BASED WORKER LIFECYCLE ====================
+# ==================== DASHBOARD AVAILABILITY (SSE-BASED) ====================
 import asyncio
 
-_watched_agents: dict[str, datetime] = {}  # uuid → last heartbeat time
+_dashboard_sse: dict[str, datetime] = {}  # uuid → when SSE was established
 _heartbeat_task: asyncio.Task | None = None
 
 
 async def _stop_worker(uuid: str):
+    """Send stop-rdp-worker to agent via WebSocket (Redis Pub/Sub → relay.py → agent WS)."""
     command = {"type": "command", "cmd": "stop-rdp-worker"}
     await _publish_command(uuid, command)
-    r = await get_redis()
-    pending_key = f"pending_cmd:{uuid}"
-    await r.rpush(pending_key, json.dumps(command))  # type: ignore[misc]
-    await r.expire(pending_key, 600)
 
 
 async def _heartbeat_checker():
-    """Every 5s check all watched agents. If heartbeat >7s old → stop worker."""
+    """Every 5s check dashboard SSE connections. If disconnected → stop worker."""
     while True:
         await asyncio.sleep(5)
         now = datetime.now(timezone.utc)
-        dead = [uuid for uuid, last in _watched_agents.items()
-                if (now - last).total_seconds() > 7]
+        dead = [uuid for uuid, last in _dashboard_sse.items()
+                if (now - last).total_seconds() > 10]
         for uuid in dead:
             try:
-                del _watched_agents[uuid]
-                logger.info(f"[heartbeat] agent {uuid} heartbeat expired, stopping worker")
+                _dashboard_sse.pop(uuid, None)
+                logger.info(f"[dashboard] agent {uuid} SSE disconnected, stopping worker")
                 await _stop_worker(uuid)
             except Exception:
-                logger.exception(f"[heartbeat] failed to stop worker for {uuid}")
+                logger.exception(f"[dashboard] failed to stop worker for {uuid}")
 
 
 def _ensure_heartbeat():
@@ -556,18 +541,30 @@ def _ensure_heartbeat():
 
 @router.post("/watch-agent")
 async def watch_agent(uuid: str):
-    """Dashboard starts watching this agent. Server will stop worker if heartbeat dies."""
+    """Dashboard reports it's running. Server will start monitoring availability."""
     _ensure_heartbeat()
-    _watched_agents[uuid] = datetime.now(timezone.utc)
-    logger.info(f"[watch-agent] watching uuid={uuid}")
+    logger.info(f"[watch-agent] dashboard opened for uuid={uuid}")
     return {"status": "ok"}
 
 
-@router.post("/agent-heartbeat")
-async def agent_heartbeat(uuid: str):
-    """Periodic heartbeat from dashboard. Must arrive every <7s to keep worker alive."""
-    _watched_agents[uuid] = datetime.now(timezone.utc)
-    return {"status": "ok"}
+@router.get("/dashboard-monitor")
+async def dashboard_monitor(uuid: str):
+    """SSE endpoint. Server monitors this connection to detect dashboard availability."""
+    _ensure_heartbeat()
+    _dashboard_sse[uuid] = datetime.now(timezone.utc)
+
+    async def event_generator():
+        try:
+            while True:
+                _dashboard_sse[uuid] = datetime.now(timezone.utc)
+                yield ": keepalive\n\n"
+                await asyncio.sleep(3)
+        except (asyncio.CancelledError, Exception):
+            pass
+        finally:
+            logger.info(f"[dashboard-monitor] SSE disconnected for uuid={uuid}")
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # ==================== SESSION SWITCH (pending commands for SYSTEM process) ====================
@@ -615,32 +612,5 @@ async def login_session_fast(
     await send_command_to_agent(agent.uuid, command)
 
     return {"status": "ok", "message": f"Fast login command queued for {data.username}"}
-
-
-@router.get("/pending-command")
-async def pending_command(
-    uuid: str,
-    token: str,
-    _=Depends(get_agent_by_token),
-):
-    """Return next pending command from queue (fallback for WebSocket delivery)
-    Used when agent WebSocket is offline or as secondary delivery mechanism.
-    Commands are queued with TTL (10 minutes for stop-rdp, etc).
-    """
-    r = await get_redis()
-    
-    # Check pending commands queue
-    pending_key = f"pending_cmd:{uuid}"
-    try:
-        command_json = await r.lpop(pending_key)  # type: ignore[misc]
-        if command_json:
-            command = json.loads(command_json)  # type: ignore[arg-type]
-            return command
-    except Exception:
-        pass
-    
-    # No pending command
-    return {"type": None}
-
 
 

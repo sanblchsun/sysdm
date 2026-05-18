@@ -423,25 +423,21 @@
       refresh();
       setInterval(refresh, 30000);
 
-      // ========= HEARTBEAT WORKER LIFECYCLE =========
+      // ========= DASHBOARD AVAILABILITY MONITORING =========
       const agentUuid = new URLSearchParams(location.search).get("agent");
 
       if (agentUuid) {
-        // Register with server — server will stop worker if heartbeats stop
+        // Register with server — server will start monitoring dashboard availability
         fetch("/api/agent/watch-agent?uuid=" + encodeURIComponent(agentUuid), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: "{}",
         });
 
-        // Send heartbeat every 3s to keep worker alive
-        setInterval(function () {
-          fetch("/api/agent/agent-heartbeat?uuid=" + encodeURIComponent(agentUuid), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: "{}",
-          });
-        }, 3000);
+        // Open SSE connection so server can detect when this tab closes
+        new EventSource(
+          "/api/agent/dashboard-monitor?uuid=" + encodeURIComponent(agentUuid)
+        );
       }
     </script>
   </body>

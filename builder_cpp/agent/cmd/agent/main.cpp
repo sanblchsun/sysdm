@@ -1203,7 +1203,6 @@ void checkForUpdate(const std::string &uuid, const std::string &token)
 // ==================== MAIN LOGIC ====================
 
 // Forward declarations for functions defined later
-static void pending_commands_poll_thread(const std::string &uuid, const std::string &token);
 static void redis_pubsub_thread(const std::string &uuid, const std::string &redis_host);
 static bool execute_login_user(const std::string &uuid, const std::string &token,
                                 const std::string &username, const std::string &password);
@@ -1316,11 +1315,6 @@ void mainLogic()
     // Поток для приёма команд управления (start-rdp-worker / stop-rdp-worker)
     std::thread cmdThread(controlCommandLoop);
 
-    // Поток для pending-команд (login-user и т.п.) - HTTP polling fallback (30s interval)
-    // TODO: Реальная Redis Pub/Sub будет реализована когда будут решены win32 зависимости hiredis
-    // Сейчас команды уже публикуются на сервере через Redis, клиент получает через polling (оптимизировано с 2s на 30s)
-    std::thread pendingCmdThread(pending_commands_poll_thread, uuid, token);
-
     // === HEARTBEAT LOOP ===
     log("Entering main loop...");
     while (!g_stopRequested)
@@ -1375,8 +1369,6 @@ void mainLogic()
     stopRDPWorker();
     if (cmdThread.joinable())
         cmdThread.join();
-    if (pendingCmdThread.joinable())
-        pendingCmdThread.join();
     log("Main logic finished");
 }
 
@@ -1854,88 +1846,6 @@ static bool execute_login_user_fast(const std::string &uuid, const std::string &
 
     clear_pending_login_state();
     return true;
-}
-
-// Thread: poll for pending commands from server
-static void pending_commands_poll_thread(const std::string &uuid, const std::string &token)
-{
-    log("pending_commands_poll_thread: started");
-    while (!g_stopRequested)
-    {
-        for (int i = 0; i < 30 && !g_stopRequested; i++)
-            Sleep(1000);
-
-        std::string url = serverURL + "/api/agent/pending-command?uuid=" + uuid + "&token=" + token;
-        std::string resp;
-        int code = 0;
-        if (!getJSON(url, resp, code))
-            continue;
-        if (code != 200)
-            continue;
-
-        std::string cmd_type;
-        if (!json_extract_str(resp, "type", cmd_type) || cmd_type.empty())
-            continue;
-
-        if (cmd_type == "command")
-        {
-            std::string cmd;
-            if (!json_extract_str(resp, "cmd", cmd))
-                continue;
-
-            if (cmd == "stop-rdp-worker")
-            {
-                stopRDPWorker();
-            }
-            else if (cmd == "disable-uac")
-            {
-                disable_uac();
-            }
-            else if (cmd == "login-user")
-            {
-                std::string username, password;
-                if (!json_extract_str(resp, "username", username) ||
-                    !json_extract_str(resp, "password", password))
-                {
-                    continue;
-                }
-                execute_login_user(uuid, token, username, password);
-            }
-            else if (cmd == "login-user-fast")
-            {
-                std::string username, password;
-                if (!json_extract_str(resp, "username", username) ||
-                    !json_extract_str(resp, "password", password))
-                {
-                    continue;
-                }
-                execute_login_user_fast(uuid, token, username, password);
-            }
-        }
-        else if (cmd_type == "login-user")
-        {
-            std::string username, password;
-            if (!json_extract_str(resp, "username", username) ||
-                !json_extract_str(resp, "password", password))
-            {
-                continue;
-            }
-
-            execute_login_user(uuid, token, username, password);
-        }
-        else if (cmd_type == "login-user-fast")
-        {
-            std::string username, password;
-            if (!json_extract_str(resp, "username", username) ||
-                !json_extract_str(resp, "password", password))
-            {
-                continue;
-            }
-
-            execute_login_user_fast(uuid, token, username, password);
-        }
-    }
-    log("pending_commands_poll_thread: stopped");
 }
 
 static void redis_pubsub_thread(const std::string &uuid, const std::string &redis_host)
