@@ -562,7 +562,7 @@ async def dashboard_monitor(uuid: str):
         except (asyncio.CancelledError, Exception):
             pass
         finally:
-            logger.info(f"[dashboard-monitor] SSE disconnected for uuid={uuid}")
+            ...
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
