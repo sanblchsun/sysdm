@@ -181,7 +181,7 @@ class AgentState:
         self.bitrate_target = "4M"
         self.fps_target = 30
         self.mjpeg_q_target = 4
-        self.rdp_timeout_target = 30
+        self.rdp_timeout_target = 5
 
         self.codec_current: Optional[str] = None
         self.encoder_current: Optional[str] = None

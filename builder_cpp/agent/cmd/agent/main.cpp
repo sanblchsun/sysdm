@@ -60,7 +60,7 @@ std::atomic<bool> g_stopRequested(false);
 std::string g_telemetryMode = "none";
 std::string g_agent_uuid;
 std::string g_agent_token;
-std::atomic<int> g_rdp_worker_timeout{30};
+std::atomic<int> g_rdp_worker_timeout{5};
 std::string g_rdp_worker_codec;
 std::string g_rdp_worker_encoder;
 std::string g_rdp_worker_bitrate;
@@ -755,7 +755,7 @@ bool spawnRDPWorker()
             if (g_shm)
             {
                 g_shm->last_activity_time = GetTickCount64();
-                g_shm->timeout_min = 30;
+                g_shm->timeout_min = g_rdp_worker_timeout.load();
             }
         }
     }
@@ -886,6 +886,7 @@ void stopRDPWorker()
 }
 
 // Forward declarations for controlCommandLoop
+static void inactivity_monitor_thread();
 static bool enable_shutdown_privilege();
 static bool execute_login_user(const std::string &uuid, const std::string &token,
                                 const std::string &username, const std::string &password);
@@ -1043,6 +1044,42 @@ void controlCommandLoop()
     }
 
     WSACleanup();
+}
+
+// Thread: monitor inactivity timeout independently of WebSocket connection
+static void inactivity_monitor_thread()
+{
+    log("inactivity_monitor: started");
+    while (!g_stopRequested)
+    {
+        Sleep(1000);
+        if (g_stopRequested) break;
+
+        bool should_stop = false;
+        {
+            std::lock_guard<std::mutex> lk(g_rdp_worker_m);
+            if (g_rdp_worker_pi.hProcess && g_shm)
+            {
+                int to = g_shm->timeout_min;
+                if (to > 0)
+                {
+                    LONG64 last = g_shm->last_activity_time;
+                    if (last > 0)
+                    {
+                        LONG64 idle_sec = (GetTickCount64() - last) / 1000;
+                        if (idle_sec >= to * 60)
+                            should_stop = true;
+                    }
+                }
+            }
+        }
+        if (should_stop)
+        {
+            log("Inactivity timeout reached, stopping worker");
+            stopRDPWorker();
+        }
+    }
+    log("inactivity_monitor: stopped");
 }
 
 // ==================== UPDATE ====================
@@ -1315,6 +1352,9 @@ void mainLogic()
     // Поток для приёма команд управления (start-rdp-worker / stop-rdp-worker)
     std::thread cmdThread(controlCommandLoop);
 
+    // Поток мониторинга неактивности (работает независимо от WebSocket)
+    std::thread inactivityThread(inactivity_monitor_thread);
+
     // === HEARTBEAT LOOP ===
     log("Entering main loop...");
     while (!g_stopRequested)
@@ -1369,6 +1409,8 @@ void mainLogic()
     stopRDPWorker();
     if (cmdThread.joinable())
         cmdThread.join();
+    if (inactivityThread.joinable())
+        inactivityThread.join();
     log("Main logic finished");
 }
 
