@@ -580,7 +580,7 @@ async def ws_control_agent(ws: WebSocket, aid: str):
         ping_task = asyncio.create_task(_ping_loop())
 
         while True:
-            msg = await ws.receive_text()
+            msg = await asyncio.wait_for(ws.receive_text(), timeout=12.0)
             try:
                 obj = json.loads(msg)
             except Exception:

@@ -15,7 +15,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 
-OFFLINE_AFTER = timedelta(minutes=1)
+OFFLINE_AFTER = timedelta(seconds=12)
 
 
 # -------------------- LEFT MENU --------------------
