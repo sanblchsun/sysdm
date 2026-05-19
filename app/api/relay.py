@@ -176,7 +176,7 @@ class AgentState:
 
     def __init__(self, aid: str):
         self.aid = aid
-        self.codec_target = "mjpeg"
+        self.codec_target = "h264"
         self.encoder_target = "cpu"
         self.bitrate_target = "4M"
         self.fps_target = 30

@@ -226,7 +226,7 @@
       <span><span class="dot"></span><b></b> <span class="tag"></span></span>
       <span class="stats"></span>
     </header>
-    <a target="_blank"><img class="media" alt=""></a>
+    <a target="_blank"><img class="media" alt=""><canvas class="media" style="display:none"></canvas></a>
     <div class="ctrl">
       <label>codec
         <select name="codec">
@@ -253,6 +253,7 @@
         const dot = el.querySelector(".dot");
         const stats = el.querySelector(".stats");
         const img = el.querySelector("img");
+        const canvas = el.querySelector("canvas");
         const link = el.querySelector("a");
         const btn = el.querySelector("button");
         const sel = (n) => el.querySelector(`[name=${n}]`);
@@ -311,6 +312,7 @@
           dot,
           stats,
           img,
+          canvas,
           link,
           sel,
           applyCodecVisibility,
@@ -318,6 +320,14 @@
           lastTime: Date.now(),
           lastSrc: "",
           placeholder: null,
+          h264Ws: null,
+          h264Decoder: null,
+          h264Buf: null,
+          h264Pos: 0,
+          h264Base: 0,
+          h264WaitingKey: true,
+          h264InitInFlight: false,
+          h264Started: false,
           btn,
         };
       }
@@ -340,13 +350,25 @@
           if (cur.codec === "h264") {
             c.img.removeAttribute("src");
             c.img.style.display = "none";
-            if (!c.placeholder) {
-              c.placeholder = document.createElement("div");
-              c.placeholder.className = "ph";
-              c.placeholder.textContent = "H.264 → клик для просмотра";
-              c.img.parentNode.appendChild(c.placeholder);
+            c.canvas.style.display = "";
+            if (c.placeholder) {
+              c.placeholder.remove();
+              c.placeholder = null;
+            }
+            if (!("VideoDecoder" in window)) {
+              if (!c.placeholder) {
+                c.placeholder = document.createElement("div");
+                c.placeholder.className = "ph";
+                c.placeholder.textContent = "H.264 → клик для просмотра";
+                c.canvas.parentNode.appendChild(c.placeholder);
+              }
+              c.canvas.style.display = "none";
+            } else {
+              startH264Card(c, a.id);
             }
           } else {
+            stopH264Card(c);
+            c.canvas.style.display = "none";
             if (c.placeholder) {
               c.placeholder.remove();
               c.placeholder = null;
@@ -362,7 +384,7 @@
           document.activeElement &&
           document.activeElement.closest(".card") === c.el;
         if (!focusedHere && !c.btn.disabled) {
-          c.sel("codec").value = t.codec || "mjpeg";
+          c.sel("codec").value = t.codec || "h264";
           c.sel("encoder").value = t.encoder || "cpu";
           c.sel("bitrate").value = t.bitrate || "4M";
           c.sel("fps").value = t.fps || 30;
@@ -379,6 +401,206 @@
         c.lastFrames = total;
         c.lastTime = Date.now();
         c.stats.textContent = `${rate}/s · uptime ${a.uptime_s}s`;
+      }
+
+      // ========= H.264 via WebCodecs (встроенный просмотр в карточке) =========
+      function nalType(b) { return b & 0x1f; }
+
+      function findStartCodes(data) {
+        const out = [];
+        let i = 0, n = data.length;
+        while (i + 3 < n) {
+          if (data[i] === 0 && data[i + 1] === 0) {
+            if (data[i + 2] === 1) {
+              out.push({ pos: i, len: 3 }); i += 3; continue;
+            }
+            if (i + 3 < n && data[i + 2] === 0 && data[i + 3] === 1) {
+              out.push({ pos: i, len: 4 }); i += 4; continue;
+            }
+          }
+          i++;
+        }
+        return out;
+      }
+
+      function findNALU(au, type) {
+        const cs = findStartCodes(au);
+        for (const c of cs)
+          if (nalType(au[c.pos + c.len]) === type) return c.pos + c.len;
+        return -1;
+      }
+
+      function codecStringFromSPS(au) {
+        const off = findNALU(au, 7);
+        if (off < 0) return "avc1.42E01E";
+        const h = (x) => x.toString(16).padStart(2, "0").toUpperCase();
+        return `avc1.${h(au[off + 1])}${h(au[off + 2])}${h(au[off + 3])}`;
+      }
+
+      async function pickDecoderConfig(codec) {
+        const candidates = [
+          { codec, hardwareAcceleration: "prefer-hardware", optimizeForLatency: true },
+          { codec, hardwareAcceleration: "prefer-hardware" },
+          { codec, optimizeForLatency: true },
+          { codec },
+          { codec, hardwareAcceleration: "prefer-software", optimizeForLatency: true },
+          { codec, hardwareAcceleration: "prefer-software" },
+        ];
+        for (const cfg of candidates) {
+          try {
+            const res = await VideoDecoder.isConfigSupported(cfg);
+            if (res && res.supported) return res.config || cfg;
+          } catch {}
+        }
+        return null;
+      }
+
+      function resetH264Decoder(c) {
+        if (c.h264Decoder) {
+          try { c.h264Decoder.close(); } catch {}
+          c.h264Decoder = null;
+        }
+        c.h264WaitingKey = true;
+        c.h264InitInFlight = false;
+      }
+
+      async function initH264Decoder(c, keyAUCopy) {
+        c.h264InitInFlight = true;
+        const codec = codecStringFromSPS(keyAUCopy);
+        try {
+          const cfg = await pickDecoderConfig(codec);
+          if (!cfg) { c.h264InitInFlight = false; return; }
+          const dec = new VideoDecoder({
+            output: (frame) => {
+              if (c.canvas.width !== frame.displayWidth) {
+                c.canvas.width = frame.displayWidth;
+                c.canvas.height = frame.displayHeight;
+              }
+              const ctx = c.canvas.getContext("2d");
+              if (ctx) ctx.drawImage(frame, 0, 0);
+              frame.close();
+            },
+            error: () => resetH264Decoder(c),
+          });
+          dec.configure(cfg);
+          c.h264Decoder = dec;
+          c.h264WaitingKey = false;
+          try {
+            dec.decode(new EncodedVideoChunk({
+              type: "key",
+              timestamp: performance.now() * 1000,
+              data: keyAUCopy,
+            }));
+          } catch { resetH264Decoder(c); }
+        } catch { resetH264Decoder(c); }
+        finally { c.h264InitInFlight = false; }
+      }
+
+      function handleH264AU(c, au) {
+        const hasIDR = findNALU(au, 5) >= 0;
+        const hasP = findNALU(au, 1) >= 0;
+        if (!hasIDR && !hasP) return;
+        const isKey = hasIDR;
+        if (!c.h264Decoder) {
+          if (!isKey || c.h264InitInFlight) return;
+          initH264Decoder(c, new Uint8Array(au));
+          return;
+        }
+        if (c.h264Decoder.state !== "configured") return;
+        if (c.h264WaitingKey) {
+          if (!isKey) return;
+          c.h264WaitingKey = false;
+        }
+        try {
+          c.h264Decoder.decode(new EncodedVideoChunk({
+            type: isKey ? "key" : "delta",
+            timestamp: performance.now() * 1000,
+            data: au,
+          }));
+        } catch { resetH264Decoder(c); }
+      }
+
+      function drainH264AUs(c) {
+        const len = c.h264Pos - c.h264Base;
+        if (len < 8) return;
+        const data = c.h264Buf.subarray(c.h264Base, c.h264Pos);
+        const codes = findStartCodes(data);
+        if (codes.length < 2) return;
+        const boundaries = [];
+        for (let k = 0; k < codes.length; k++) {
+          const cc = codes[k];
+          const t = nalType(data[cc.pos + cc.len]);
+          if (t === 9) boundaries.push(cc.pos);
+          else if (t === 7 && boundaries.length === 0) boundaries.push(cc.pos);
+        }
+        if (boundaries.length < 2) return;
+        for (let i = 0; i < boundaries.length - 1; i++) {
+          handleH264AU(c, data.subarray(boundaries[i], boundaries[i + 1]));
+        }
+        c.h264Base += boundaries[boundaries.length - 1];
+        if (c.h264Base > c.h264Buf.length / 2) {
+          const remaining = c.h264Pos - c.h264Base;
+          c.h264Buf.copyWithin(0, c.h264Base, c.h264Pos);
+          c.h264Pos = remaining;
+          c.h264Base = 0;
+        }
+      }
+
+      function startH264Card(c, aid) {
+        if (c.h264Started) return;
+        if (!("VideoDecoder" in window)) return;
+        const BUF_SIZE = 2 * 1024 * 1024;
+        c.h264Buf = new Uint8Array(BUF_SIZE);
+        c.h264Pos = 0;
+        c.h264Base = 0;
+        c.h264WaitingKey = true;
+        c.h264InitInFlight = false;
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        c.h264Ws = new WebSocket(
+          `${proto}//${location.host}/relay/ws/stream/h264/${encodeURIComponent(aid)}`
+        );
+        c.h264Ws.binaryType = "arraybuffer";
+        c.h264Ws.onmessage = (ev) => {
+          const add = new Uint8Array(ev.data);
+          if (add.length === 0) return;
+          if (c.h264Pos + add.length > c.h264Buf.length) {
+            if (c.h264Base > 0) {
+              const remaining = c.h264Pos - c.h264Base;
+              c.h264Buf.copyWithin(0, c.h264Base, c.h264Pos);
+              c.h264Pos = remaining;
+              c.h264Base = 0;
+            }
+            if (c.h264Pos + add.length > c.h264Buf.length) {
+              const newSize = Math.max(c.h264Buf.length * 2, c.h264Pos + add.length);
+              const newBuf = new Uint8Array(newSize);
+              newBuf.set(c.h264Buf.subarray(0, c.h264Pos), 0);
+              c.h264Buf = newBuf;
+            }
+          }
+          c.h264Buf.set(add, c.h264Pos);
+          c.h264Pos += add.length;
+          drainH264AUs(c);
+        };
+        c.h264Ws.onerror = () => {};
+        c.h264Ws.onclose = () => {};
+        c.h264Started = true;
+      }
+
+      function stopH264Card(c) {
+        c.h264Started = false;
+        if (c.h264Decoder) {
+          try { c.h264Decoder.close(); } catch {}
+          c.h264Decoder = null;
+        }
+        if (c.h264Ws) {
+          try { c.h264Ws.close(); } catch {}
+          c.h264Ws = null;
+        }
+        c.h264Buf = null;
+        c.h264Pos = 0;
+        c.h264Base = 0;
+        c.h264WaitingKey = true;
+        c.h264InitInFlight = false;
       }
 
       async function refresh() {
@@ -399,6 +621,7 @@
         const ids = new Set(filteredAgents.map((a) => a.id));
         for (const [id, c] of cards) {
           if (!ids.has(id)) {
+            stopH264Card(c);
             c.el.remove();
             cards.delete(id);
           }
