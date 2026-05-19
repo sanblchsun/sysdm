@@ -514,6 +514,8 @@ async def _update_agent_telemetry(aid: str, data: dict):
                 additional.total_memory = data["total_memory"]
             if data.get("available_memory") is not None:
                 additional.available_memory = data["available_memory"]
+            if data.get("disks") is not None:
+                additional.disks = data["disks"]
 
             agent.last_seen = datetime.now(timezone.utc)
             await session.commit()

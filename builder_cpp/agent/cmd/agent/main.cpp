@@ -615,6 +615,34 @@ std::string getAvailableMemory()
     return std::to_string(m.ullAvailPhys / (1024 * 1024));
 }
 
+std::vector<std::string> getDiskInfo()
+{
+    std::vector<std::string> result;
+    char drives[256];
+    if (!GetLogicalDriveStringsA(sizeof(drives), drives))
+        return result;
+    char *d = drives;
+    while (*d)
+    {
+        std::string drv(d);
+        UINT t = GetDriveTypeA(drv.c_str());
+        if (t == DRIVE_FIXED)
+        {
+            ULARGE_INTEGER total, free;
+            if (GetDiskFreeSpaceExA(drv.c_str(), nullptr, &total, &free))
+            {
+                uint64_t totalGB = total.QuadPart / (1024ULL * 1024 * 1024);
+                uint64_t freeGB = free.QuadPart / (1024ULL * 1024 * 1024);
+                std::string n = drv;
+                if (!n.empty() && n.back() == '\\') n.pop_back();
+                result.push_back("{\"name\":\"" + n + "\",\"size\":" + std::to_string(totalGB) + ",\"free\":" + std::to_string(freeGB) + "}");
+            }
+        }
+        d += drv.length() + 1;
+    }
+    return result;
+}
+
 TelemetryData collectTelemetry()
 {
     TelemetryData data;
@@ -624,6 +652,7 @@ TelemetryData collectTelemetry()
     data.externalIP = getExternalIP();
     data.totalMemory = std::stoull(getTotalMemory());
     data.availableMemory = std::stoull(getAvailableMemory());
+    data.disks = getDiskInfo();
     return data;
 }
 
@@ -1072,7 +1101,14 @@ void controlCommandLoop()
                          << ",\"external_ip\":\"" << td.externalIP << "\""
                          << ",\"total_memory\":" << td.totalMemory
                          << ",\"available_memory\":" << td.availableMemory
-                         << "}";
+                         << ",\"disks\":[";
+                    for (size_t i = 0; i < td.disks.size(); i++)
+                    {
+                        if (i > 0) resp << ",";
+                        resp << td.disks[i];
+                    }
+                    resp << "]";
+                    resp << "}";
                     std::string response = resp.str();
                     RDPAgent::ws_send(c, 0x1, response.data(), response.size());
                 }
@@ -1372,7 +1408,14 @@ void mainLogic()
                                                           "\"available_memory\":" +
                          std::to_string(t.availableMemory) + ","
                                                               "\"exe_version\":\"" +
-                         buildSlug + "\"}";
+                         buildSlug + "\","
+                                     "\"disks\":[";
+        for (size_t i = 0; i < t.disks.size(); i++)
+        {
+            if (i > 0) tb += ",";
+            tb += t.disks[i];
+        }
+        tb += "]}";
         postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token, tb, rb, rc);
     }
 

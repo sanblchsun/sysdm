@@ -1,12 +1,27 @@
 <!-- app/templates/partials/bottom_panel.html -->
-<div class="bottom-panel" {% if agent %}data-agent-id="{{ agent.id }}" data-agent-uuid="{{ agent.uuid }}"{% endif %}>
+<div
+  class="bottom-panel"
+  {%
+  if
+  agent
+  %}data-agent-id="{{ agent.id }}"
+  data-agent-uuid="{{ agent.uuid }}"
+  {%
+  endif
+  %}
+>
   <!-- Store agent ID for JavaScript access -->
   <script>
     if (!window._bottomPanelInitialized) {
       window._bottomPanelInitialized = true;
     }
-    window.currentAgentId = document.querySelector('.bottom-panel')?.getAttribute('data-agent-id') || null;
-    console.log("[bottom_panel] Set window.currentAgentId =", window.currentAgentId);
+    window.currentAgentId =
+      document.querySelector(".bottom-panel")?.getAttribute("data-agent-id") ||
+      null;
+    console.log(
+      "[bottom_panel] Set window.currentAgentId =",
+      window.currentAgentId,
+    );
   </script>
   <!-- TOOLBAR -->
   <div class="bottom-tabs" role="tablist">
@@ -68,7 +83,11 @@
         <!-- SUMMARY TOOLBAR -->
         <div class="summary-toolbar" role="toolbar">
           <!-- Left actions -->
-          <button class="summary-btn icon-only" title="Refresh">
+          <button
+            class="summary-btn icon-only"
+            id="refresh-telemetry-btn"
+            title="Refresh"
+          >
             <i class="material-icons"></i>
             <span class="icon-class icon-refresh"></span>
           </button>
@@ -76,13 +95,8 @@
           <i class="status-icon online fas fa-signal"></i>
 
           <strong class="agent-title">
-            {{ agent.name_pc if agent else "—" }}
+            Телеметрия агента
           </strong>
-
-          <span class="agent-meta">
-            • {{ agent.additional_data.system if agent and agent.additional_data
-            else "OS" }} • Agent v{{ agent.agent_version if agent else "-" }}
-          </span>
 
           <div class="summary-spacer"></div>
 
@@ -161,7 +175,6 @@
           </div>
         </div>
         {% if agent %}
-        <h3 class="h3_position">Подробности агента</h3>
 
         <nobr class="icon-class icon_name_pc"></nobr>
         <nobr><strong> Имя ПК:</strong> {{ agent.name_pc }}</nobr>
@@ -193,17 +206,34 @@
         <nobr class="icon-class icon_disk"></nobr>
         <nobr><strong> Диски:</strong></nobr>
         <br />
-        <ul>
-          {% if agent.additional_data and agent.additional_data.disks %} {% for
-          disk in agent.additional_data.disks %}
-          <li>
-            {{ disk.name }}: {{ disk.size or "-" }} ГБ ({{ disk.free or "-" }}
-            ГБ свободно)
-          </li>
-          {% endfor %} {% else %}
-          <li>C: - ГБ (- ГБ свободно)</li>
-          {% endif %}
-        </ul>
+        {% if agent.additional_data and agent.additional_data.disks %} {% for
+        disk in agent.additional_data.disks %} {% set dsize = disk.size | int(0)
+        %} {% set dfree = disk.free | int(0) %} {% set used = dsize - dfree %}
+        {% if dsize > 0 %} {% set used_pct = (used * 100 / dsize) | int %} {%
+        else %} {% set used_pct = 0 %} {% endif %} {% set free_pct = 100 -
+        used_pct %} {% set used_style = "width:" ~ used_pct ~ "%" %} {% set
+        free_style = "width:" ~ free_pct ~ "%" %}
+        <div class="disk-bar-row">
+          <span class="disk-bar-label">{{ disk.name }}:</span>
+          <div class="disk-bar">
+            <div class="disk-bar-used" style="{{ used_style }}">
+              <span class="disk-bar-text">{{ used }} ГБ / {{ dsize }} ГБ</span>
+            </div>
+            <div class="disk-bar-free" style="{{ free_style }}">
+              <span class="disk-bar-text">{{ dfree }} ГБ свободно</span>
+            </div>
+          </div>
+        </div>
+        {% endfor %} {% else %}
+        <div class="disk-bar-row">
+          <span class="disk-bar-label">C:</span>
+          <div class="disk-bar">
+            <div class="disk-bar-used" style="width: 0%">
+              <span class="disk-bar-text">- / - ГБ</span>
+            </div>
+          </div>
+        </div>
+        {% endif %}
 
         <nobr class="icon-class icon_memory"></nobr>
         <nobr><strong> Память:</strong></nobr>

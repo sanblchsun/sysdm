@@ -404,3 +404,43 @@ function closeActionsMenu() {
   if (menu) menu.classList.remove("open");
   if (btn) btn.setAttribute("aria-expanded", "false");
 }
+
+// ==================== REFRESH TELEMETRY ====================
+function initRefreshTelemetry() {
+  const btn = document.getElementById("refresh-telemetry-btn");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    const agentId = getAgentId();
+    if (!agentId) return;
+
+    btn.classList.add("loading");
+
+    try {
+      const resp = await fetch(`/api/agent/${agentId}/request-telemetry`, { method: "POST" });
+      if (!resp.ok) throw new Error(await resp.text());
+
+      const data = await resp.json();
+      if (!data.agent_connected) {
+        console.warn("[refresh-telemetry] Agent not connected, telemetry may not update");
+      }
+
+      // Give agent a moment to send telemetry, then refresh bottom panel
+      await new Promise(r => setTimeout(r, 1500));
+
+      const bottomPanel = document.querySelector('.bottom-panel');
+      const currentAgentId = bottomPanel?.getAttribute('data-agent-id');
+      if (currentAgentId) {
+        htmx.ajax('GET', `/ui/bottom-panel?agent_id=${currentAgentId}`, '#bottom-right');
+      }
+    } catch (error) {
+      console.error("[refresh-telemetry] Failed:", error);
+      alert("Failed to request telemetry: " + error.message);
+    } finally {
+      btn.classList.remove("loading");
+    }
+  });
+}
+
+document.addEventListener("DOMContentLoaded", initRefreshTelemetry);
+document.addEventListener("htmx:afterSwap", initRefreshTelemetry);
