@@ -1,6 +1,6 @@
 # app/models.py
 from datetime import datetime, timezone
-from sqlalchemy import JSON, ForeignKey, Index, String, DateTime, Boolean, Integer
+from sqlalchemy import JSON, ForeignKey, Index, String, DateTime, Boolean, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 from passlib.context import CryptContext
@@ -118,7 +118,7 @@ class AgentAdditionalData(Base):
     # ===== Системная информация =====
     system: Mapped[str | None] = mapped_column(String(255), nullable=True)
     user_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    ip_addr: Mapped[str | None] = mapped_column(String(45), nullable=True)  # IPv6
+    ip_addr: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
 
     # ===== Ресурсы =====

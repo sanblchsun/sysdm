@@ -194,10 +194,15 @@
         <br />
 
         <nobr class="icon-class icon_user_network"></nobr>
-        <nobr
-          ><strong> IP-адрес:</strong>
-          {{ agent.additional_data.ip_addr if agent.additional_data else "-" }}
-        </nobr>
+        <nobr><strong> IP-адреса:</strong></nobr>
+        <br />
+        {% if agent.additional_data and agent.additional_data.ip_addr %}
+          {% for ip in agent.additional_data.ip_addr.split(', ') %}
+            <nobr>&nbsp;&nbsp;&nbsp;• {{ ip }}</nobr><br />
+          {% endfor %}
+        {% else %}
+          <nobr>&nbsp;&nbsp;&nbsp;• -</nobr>
+        {% endif %}
 
         <br />
 

@@ -29,6 +29,7 @@
 #include <wincrypt.h>
 #include <cstring>
 #include <tlhelp32.h>
+#include <iphlpapi.h>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -37,6 +38,7 @@
 #pragma comment(lib, "wtsapi32.lib")
 #pragma comment(lib, "userenv.lib")
 #pragma comment(lib, "netapi32.lib")
+#pragma comment(lib, "iphlpapi.lib")
 
 #include <lm.h>
 #include <sddl.h>
@@ -207,38 +209,58 @@ std::string loadOrCreateMachineUID()
 
 // ==================== NETWORK ====================
 
-std::string getLocalIP()
+std::string getAllLocalIPs()
 {
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+    std::vector<std::string> ips;
+    ULONG bufLen = 15000;
+    PIP_ADAPTER_ADDRESSES pAddresses = (PIP_ADAPTER_ADDRESSES)malloc(bufLen);
+    if (!pAddresses)
         return "";
-    char hostname[256];
-    if (gethostname(hostname, sizeof(hostname)))
+
+    DWORD ret = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, NULL, pAddresses, &bufLen);
+    if (ret == ERROR_BUFFER_OVERFLOW)
     {
-        WSACleanup();
-        return "";
+        free(pAddresses);
+        pAddresses = (PIP_ADAPTER_ADDRESSES)malloc(bufLen);
+        if (!pAddresses)
+            return "";
+        ret = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, NULL, pAddresses, &bufLen);
     }
-    struct hostent *he = gethostbyname(hostname);
-    if (!he)
+
+    if (ret == NO_ERROR)
     {
-        WSACleanup();
-        return "";
-    }
-    for (int i = 0; he->h_addr_list[i]; i++)
-    {
-        struct in_addr **addrList = (struct in_addr **)he->h_addr_list;
-        if (addrList[i])
+        for (PIP_ADAPTER_ADDRESSES pAdapter = pAddresses; pAdapter; pAdapter = pAdapter->Next)
         {
-            char *ip = inet_ntoa(*addrList[i]);
-            if (ip && strncmp(ip, "127.", 4) != 0)
+            // Skip loopback, tunnel, and teredo adapters
+            if (pAdapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+                continue;
+            if (pAdapter->TunnelType == TUNNEL_TYPE_TEREDO)
+                continue;
+
+            for (PIP_ADAPTER_UNICAST_ADDRESS pAddr = pAdapter->FirstUnicastAddress; pAddr; pAddr = pAddr->Next)
             {
-                WSACleanup();
-                return std::string(ip);
+                SOCKADDR *sa = pAddr->Address.lpSockaddr;
+                if (sa->sa_family == AF_INET)
+                {
+                    struct sockaddr_in *sa_in = (struct sockaddr_in *)sa;
+                    char ip[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &sa_in->sin_addr, ip, sizeof(ip));
+                    if (strncmp(ip, "127.", 4) != 0)
+                        ips.push_back(std::string(ip));
+                }
             }
         }
     }
-    WSACleanup();
-    return "";
+
+    free(pAddresses);
+
+    std::string result;
+    for (size_t i = 0; i < ips.size(); i++)
+    {
+        if (i > 0) result += ", ";
+        result += ips[i];
+    }
+    return result;
 }
 
 std::string getExternalIP()
@@ -648,7 +670,7 @@ TelemetryData collectTelemetry()
     TelemetryData data;
     data.system = "windows";
     data.userName = getUsersAsString();
-    data.ipAddr = getLocalIP();
+    data.ipAddr = getAllLocalIPs();
     data.externalIP = getExternalIP();
     data.totalMemory = std::stoull(getTotalMemory());
     data.availableMemory = std::stoull(getAvailableMemory());
