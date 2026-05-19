@@ -285,6 +285,42 @@ function resetTakeControlButton() {
   console.log("[takeControl] State reset complete");
 }
 
+// ==================== PASSWORD PROMPT (masked input) ====================
+function passwordPrompt(message) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText =
+      "position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:99999";
+    const box = document.createElement("div");
+    box.style.cssText =
+      "background:#1b1b1b;border:1px solid #444;border-radius:8px;padding:24px;min-width:360px;color:#eee;font-family:system-ui,Arial";
+    box.innerHTML =
+      `<p style="margin:0 0 12px;font-size:14px">${message}</p>` +
+      `<input type="password" style="width:100%;padding:8px;border:1px solid #555;border-radius:4px;background:#222;color:#eee;font:inherit;box-sizing:border-box" autofocus>` +
+      `<div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">` +
+      `<button id="pp-cancel" style="padding:6px 16px;border:1px solid #555;border-radius:4px;background:#333;color:#eee;cursor:pointer">Cancel</button>` +
+      `<button id="pp-ok" style="padding:6px 16px;border:1px solid #3a5a3a;border-radius:4px;background:#2a3b2a;color:#e7ffe7;cursor:pointer">OK</button>` +
+      `</div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    const input = box.querySelector("input");
+    input.focus();
+
+    const cleanup = (val) => {
+      document.body.removeChild(overlay);
+      resolve(val);
+    };
+
+    box.querySelector("#pp-ok").onclick = () => cleanup(input.value);
+    box.querySelector("#pp-cancel").onclick = () => cleanup(null);
+    input.onkeydown = (e) => {
+      if (e.key === "Enter") cleanup(input.value);
+      if (e.key === "Escape") cleanup(null);
+    };
+  });
+}
+
 // ==================== LOGIN SESSION (Switch Windows User) ====================
 // Reboot-based approach (safe, works always — but reboots the machine)
 async function loginSessionReboot() {
@@ -294,7 +330,7 @@ async function loginSessionReboot() {
   const username = prompt("Windows username (e.g. user@domain or DOMAIN\\user):");
   if (!username) return;
 
-  const password = prompt("Password for " + username + ":");
+  const password = await passwordPrompt("Password for " + username + ":");
   if (!password) return;
 
   if (!confirm(`Switch to user "${username}"? The machine will REBOOT.`)) return;
@@ -327,7 +363,7 @@ async function loginSessionFast() {
   const username = prompt("Windows username (e.g. user@domain or DOMAIN\\user):");
   if (!username) return;
 
-  const password = prompt("Password for " + username + ":");
+  const password = await passwordPrompt("Password for " + username + ":");
   if (!password) return;
 
   if (!confirm(`Switch to user "${username}" via fast user switch? Current session will be logged off.`)) return;
