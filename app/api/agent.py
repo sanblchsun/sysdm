@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 import secrets
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from app.core.auth_agent import get_agent_by_token
 from app.database import get_db
 from app.models import Agent, AgentAdditionalData, Company
@@ -19,7 +19,7 @@ from app.schemas.agent import (
     LoginSessionIn,
 
 )
-from sqlalchemy import select, update
+from sqlalchemy import select
 from app.schemas.agent_update import (
     AgentCheckUpdateIn,
     AgentCheckUpdateOut,
@@ -34,7 +34,6 @@ import json
 
 # -------------------- TOP PANEL --------------------
 router = APIRouter(prefix="/api/agent", tags=["agent"])
-UPDATE_INTERVAL = timedelta(seconds=60)
 
 # Rate limiter (initialized in main.py)
 def get_limiter():
@@ -53,19 +52,7 @@ async def _publish_command(uuid: str, command: dict):
     channel = REDIS_COMMAND_CHANNEL.format(uuid=uuid)
     await r.publish(channel, json.dumps(command))  # type: ignore[misc]
 
-# ==================== AGENT STATUS (Redis Pub/Sub) ====================
-REDIS_AGENT_STATUS_CHANNEL = "agent:status"
-REDIS_AGENT_TTL = 60  # Status TTL for online detection
 
-async def _publish_agent_status(uuid: str, is_online: bool):
-    """Publish agent online/offline status via Redis Pub/Sub for real-time UI updates"""
-    r = await get_redis()
-    status = {
-        "uuid": uuid,
-        "is_online": is_online,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    await r.publish(REDIS_AGENT_STATUS_CHANNEL, json.dumps(status))  # type: ignore[misc]
 
 
 @router.post("/register", response_model=AgentRegisterOut)
@@ -227,55 +214,7 @@ async def agent_telemetry(
     return {"status": "ok", "agent_uuid": agent.uuid}
 
 
-@router.post("/heartbeat")
-async def heartbeat(
-    uuid: str,
-    token: str,
-    agent: Agent = Depends(get_agent_by_token),
-    session: AsyncSession = Depends(get_db),
-):
-    now = datetime.now(timezone.utc)
-    
-    # Handle both offset-aware and offset-naive datetimes from database
-    last_seen = agent.last_seen
-    if last_seen and last_seen.tzinfo is None:
-        last_seen = last_seen.replace(tzinfo=timezone.utc)
 
-    # Trigger full telemetry if user_name is missing (for existing agents)
-    result = await session.execute(
-        select(AgentAdditionalData).where(AgentAdditionalData.agent_id == agent.id)
-    )
-    additional = result.scalars().first()
-    needs_telemetry = additional is None or not additional.user_name
-    telemetry_mode = "full" if needs_telemetry else agent.telemetry_mode
-
-    # Обновляем last_seen не чаще чем раз в UPDATE_INTERVAL секунд
-    if not agent.last_seen or now - last_seen > UPDATE_INTERVAL:
-        await session.execute(
-            update(Agent).where(Agent.id == agent.id).values(last_seen=now)
-        )
-        await session.commit()
-
-        # Publish agent online status to Redis for real-time UI updates (no polling delay)
-        await _publish_agent_status(agent.uuid, is_online=True)
-
-        return {
-            "status": "ok",
-            "agent_uuid": agent.uuid,
-            "last_seen": now,
-            "telemetry_mode": telemetry_mode,
-        }
-
-    # Publish agent online status even if DB not updated (for responsive UI)
-    await _publish_agent_status(agent.uuid, is_online=True)
-
-    # Если обновление не требуется — не трогаем БД
-    return {
-        "status": "ok",
-        "agent_uuid": agent.uuid,
-        "last_seen": agent.last_seen,
-        "telemetry_mode": telemetry_mode,
-    }
 
 
 @router.post("/check-update", response_model=AgentCheckUpdateOut)
@@ -357,32 +296,6 @@ async def set_external_ip(
     await session.commit()
 
     return {"status": "ok", "external_ip": company.external_ip}
-
-
-# -------------------- TELEMETRY MODE --------------------
-from app.schemas.agent import AgentTelemetryModeUpdate
-
-
-@router.post("/{agent_id}/telemetry-mode")
-async def set_telemetry_mode(
-    agent_id: int,
-    data: AgentTelemetryModeUpdate,
-    session: AsyncSession = Depends(get_db),
-):
-    """Установить режим телеметрии для агента (none, basic, full)."""
-    if data.telemetry_mode not in ["none", "basic", "full"]:
-        raise HTTPException(
-            status_code=400, detail="Invalid telemetry_mode. Use: none, basic, full"
-        )
-
-    agent = await session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    agent.telemetry_mode = data.telemetry_mode
-    await session.commit()
-
-    return {"status": "ok", "telemetry_mode": agent.telemetry_mode}
 
 
 @router.post("/{agent_id}/control-uac")

@@ -6,6 +6,7 @@ import os
 import socket
 import time
 import json
+from datetime import datetime, timezone
 from typing import Dict, Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -15,9 +16,11 @@ from sqlalchemy import select
 
 from app.core.authx import auth
 from app.database import AsyncSessionLocal
-from app.models import User
+from app.models import Agent, AgentAdditionalData, User
 from app.schemas.relay import RelayConfigBody, AgentsListResponse, AgentStatusResponse
 from app.redis_client import get_redis
+
+REDIS_AGENT_STATUS_CHANNEL = "agent:status"
 
 router = APIRouter(prefix="/relay", tags=["relay"])
 _mjpeg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
@@ -454,6 +457,70 @@ async def _ws_auth_ok(ws: WebSocket) -> bool:
 
 
 # ============ WebSocket CONTROL ============
+async def _update_agent_last_seen(aid: str):
+    """Update agent's last_seen in DB and publish online status"""
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Agent).where(Agent.uuid == aid)
+            )
+            agent = result.scalars().first()
+            if agent:
+                agent.last_seen = datetime.now(timezone.utc)
+                await session.commit()
+    except Exception:
+        pass
+
+    try:
+        r = await get_redis()
+        status = {
+            "uuid": aid,
+            "is_online": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await r.publish(REDIS_AGENT_STATUS_CHANNEL, json.dumps(status))
+    except Exception:
+        pass
+
+
+async def _update_agent_telemetry(aid: str, data: dict):
+    """Update agent telemetry from WebSocket telemetry message"""
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Agent).where(Agent.uuid == aid)
+            )
+            agent = result.scalars().first()
+            if not agent:
+                return
+
+            result = await session.execute(
+                select(AgentAdditionalData).where(AgentAdditionalData.agent_id == agent.id)
+            )
+            additional = result.scalars().first()
+            if not additional:
+                additional = AgentAdditionalData(agent_id=agent.id)
+                session.add(additional)
+
+            if data.get("system") is not None:
+                additional.system = data["system"]
+            if data.get("user_name") is not None:
+                additional.user_name = data["user_name"]
+            if data.get("ip_addr") is not None:
+                additional.ip_addr = data["ip_addr"]
+            if data.get("external_ip") is not None:
+                additional.external_ip = data["external_ip"]
+            if data.get("total_memory") is not None:
+                additional.total_memory = data["total_memory"]
+            if data.get("available_memory") is not None:
+                additional.available_memory = data["available_memory"]
+
+            agent.last_seen = datetime.now(timezone.utc)
+            await session.commit()
+    except Exception:
+        pass
+
+
 @router.websocket("/ws/control/agent/{aid}")
 async def ws_control_agent(ws: WebSocket, aid: str):
     await ws.accept()
@@ -476,14 +543,32 @@ async def ws_control_agent(ws: WebSocket, aid: str):
     except Exception:
         pass
     logger.info(f"[relay] agent connected: {aid} worker={WORKER_ID}")
+
+    # Background task: send ping every 30s
+    ping_task = None
     try:
+        async def _ping_loop():
+            while True:
+                try:
+                    await asyncio.sleep(30)
+                    await ws.send_text(json.dumps({"type": "ping"}))
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    break
+
+        ping_task = asyncio.create_task(_ping_loop())
+
         while True:
             msg = await ws.receive_text()
             try:
                 obj = json.loads(msg)
             except Exception:
                 continue
-            if obj.get("type") == "hello":
+
+            msg_type = obj.get("type", "")
+
+            if msg_type == "hello":
                 HUB.agent_hello[aid] = msg
                 try:
                     r = await get_redis()
@@ -491,19 +576,32 @@ async def ws_control_agent(ws: WebSocket, aid: str):
                 except Exception:
                     pass
                 await PS_MANAGER.publish(f"ctrl:from:{aid}", msg)
-            elif obj.get("type") == "clipboard":
+            elif msg_type == "clipboard":
                 await PS_MANAGER.publish(f"ctrl:from:{aid}", msg)
+            elif msg_type == "pong":
+                asyncio.create_task(_update_agent_last_seen(aid))
+            elif msg_type == "telemetry":
+                asyncio.create_task(_update_agent_telemetry(aid, obj))
     except WebSocketDisconnect:
         pass
     except Exception:
         pass
     finally:
+        if ping_task:
+            ping_task.cancel()
         if HUB.agent_ws.get(aid) is ws:
             HUB.agent_ws.pop(aid, None)
             HUB.agent_hello.pop(aid, None)
             try:
                 r = await get_redis()
                 await r.delete(REDIS_WORKER_KEY.format(aid=aid))
+                # Publish offline status
+                status = {
+                    "uuid": aid,
+                    "is_online": False,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                await r.publish(REDIS_AGENT_STATUS_CHANNEL, json.dumps(status))
             except Exception:
                 pass
         logger.info(f"[relay] agent disconnected: {aid} worker={WORKER_ID}")

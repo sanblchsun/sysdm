@@ -39,6 +39,7 @@
 #pragma comment(lib, "netapi32.lib")
 
 #include <lm.h>
+#include <sddl.h>
 #include "rdp_agent.h"
 
 // Redis C++ library (hiredis) - optional, for Pub/Sub command delivery
@@ -59,7 +60,6 @@ std::string buildSlug = BUILD_SLUG;
 std::mutex logMutex;
 std::ofstream logFile;
 std::atomic<bool> g_stopRequested(false);
-std::string g_telemetryMode = "none";
 std::string g_agent_uuid;
 std::string g_agent_token;
 std::atomic<int> g_rdp_worker_timeout{5};
@@ -281,113 +281,6 @@ std::string getExternalIP()
     return result;
 }
 
-std::string getUsersFromRegistry()
-{
-    HKEY hKey = NULL;
-    LONG result = RegOpenKeyExA(
-        HKEY_LOCAL_MACHINE,
-        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList",
-        0,
-        KEY_READ,
-        &hKey);
-
-    if (result != ERROR_SUCCESS)
-        return "";
-
-    std::vector<std::string> users;
-    char subKeyName[256];
-    DWORD subKeySize;
-    BYTE valueData[4096];
-    DWORD valueDataSize;
-    DWORD index = 0;
-
-    while (true)
-    {
-        subKeySize = sizeof(subKeyName);
-        result = RegEnumKeyExA(hKey, index++, subKeyName, &subKeySize, NULL, NULL, NULL, NULL);
-        if (result != ERROR_SUCCESS)
-            break;
-
-        // Skip well-known system SIDs
-        std::string sid(subKeyName, subKeySize);
-        if (sid == "S-1-5-18" || sid == "S-1-5-19" || sid == "S-1-5-20")
-            continue;
-
-        HKEY hSubKey = NULL;
-        result = RegOpenKeyExA(hKey, subKeyName, 0, KEY_READ, &hSubKey);
-        if (result != ERROR_SUCCESS)
-            continue;
-
-        valueDataSize = sizeof(valueData);
-        DWORD type = 0;
-        result = RegQueryValueExA(hSubKey, "ProfileImagePath", NULL, &type, valueData, &valueDataSize);
-        if (result != ERROR_SUCCESS)
-        {
-            RegCloseKey(hSubKey);
-            continue;
-        }
-        RegCloseKey(hSubKey);
-
-        if (type != REG_EXPAND_SZ && type != REG_SZ)
-            continue;
-
-        if (valueDataSize >= sizeof(valueData))
-            valueData[sizeof(valueData) - 1] = 0;
-        else
-            valueData[valueDataSize] = 0;
-
-        // Expand environment variables (%SystemDrive% etc.)
-        std::string path;
-        if (type == REG_EXPAND_SZ && strstr((char *)valueData, "%") != NULL)
-        {
-            char expanded[4096];
-            DWORD expandedSize = ExpandEnvironmentStringsA((char *)valueData, expanded, sizeof(expanded));
-            if (expandedSize > 0 && expandedSize < sizeof(expanded))
-                path = expanded;
-            else
-                path = (char *)valueData;
-        }
-        else
-        {
-            path = (char *)valueData;
-        }
-
-        // Extract username from profile path (last component after backslash)
-        size_t pos = path.find_last_of("\\");
-        if (pos == std::string::npos)
-            continue;
-
-        std::string username = path.substr(pos + 1);
-        if (username.empty())
-            continue;
-
-        // Skip built-in / system profile folders
-        std::string lower = username;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower == "administrator" || lower == "guest" || lower == "default" ||
-            lower == "public" || lower == "defaultuser0" || lower == "defaultaccount" ||
-            lower == "all users")
-            continue;
-
-        // Skip duplicates
-        if (std::find(users.begin(), users.end(), username) != users.end())
-            continue;
-
-        users.push_back(username);
-    }
-
-    RegCloseKey(hKey);
-
-    std::string result_str;
-    for (size_t i = 0; i < users.size(); i++)
-    {
-        if (i > 0)
-            result_str += ", ";
-        result_str += users[i];
-    }
-    return result_str;
-}
-
 std::vector<std::string> getLocalUsersFromNetAPI()
 {
     std::vector<std::string> users;
@@ -441,38 +334,80 @@ std::vector<std::string> getLocalUsersFromNetAPI()
 
 std::string getUsersAsString()
 {
-    std::vector<std::string> allUsers;
+    std::vector<std::string> names;
+    std::vector<std::string> lowerNames;  // lowercase for dedup
 
-    std::string registryUsers = getUsersFromRegistry();
-    std::stringstream ss(registryUsers);
-    std::string user;
-    while (std::getline(ss, user, ','))
+    auto addUser = [&](const std::string &name) {
+        std::string lower = name;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "administrator" || lower == "guest" ||
+            lower == "defaultuser0" || lower == "defaultaccount")
+            return;
+        if (std::find(lowerNames.begin(), lowerNames.end(), lower) != lowerNames.end())
+            return;
+        names.push_back(name);
+        lowerNames.push_back(lower);
+    };
+
+    // 1. Enumerate ProfileList SIDs, resolve each via LookupAccountSid
+    //    — handles both local and domain users; skips deleted accounts
+    HKEY hKey = NULL;
+    LONG regResult = RegOpenKeyExA(
+        HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList",
+        0, KEY_READ, &hKey);
+
+    if (regResult == ERROR_SUCCESS)
     {
-        size_t start = user.find_first_not_of(" ");
-        size_t end = user.find_last_not_of(" ");
-        if (start != std::string::npos && end != std::string::npos)
+        char subKeyName[256];
+        DWORD subKeySize;
+        DWORD index = 0;
+
+        while (true)
         {
-            std::string trimmed = user.substr(start, end - start + 1);
-            if (!trimmed.empty())
-                allUsers.push_back(trimmed);
+            subKeySize = sizeof(subKeyName);
+            regResult = RegEnumKeyExA(hKey, index++, subKeyName, &subKeySize,
+                                       NULL, NULL, NULL, NULL);
+            if (regResult != ERROR_SUCCESS)
+                break;
+
+            std::string sidStr(subKeyName, subKeySize);
+            if (sidStr == "S-1-5-18" || sidStr == "S-1-5-19" || sidStr == "S-1-5-20")
+                continue;
+
+            PSID pSid = NULL;
+            if (!ConvertStringSidToSidA(sidStr.c_str(), &pSid))
+                continue;
+
+            char accountName[256] = {0};
+            DWORD accountNameLen = sizeof(accountName);
+            char domainName[256] = {0};
+            DWORD domainNameLen = sizeof(domainName);
+            SID_NAME_USE sidUse;
+
+            if (LookupAccountSidA(NULL, pSid, accountName, &accountNameLen,
+                                   domainName, &domainNameLen, &sidUse))
+            {
+                addUser(std::string(accountName));
+            }
+
+            LocalFree(pSid);
         }
+        RegCloseKey(hKey);
     }
 
+    // 2. Add local SAM users (catches newly created users without profiles yet)
     std::vector<std::string> localUsers = getLocalUsersFromNetAPI();
-    for (const auto& localUser : localUsers)
-    {
-        if (std::find(allUsers.begin(), allUsers.end(), localUser) == allUsers.end())
-        {
-            allUsers.push_back(localUser);
-        }
-    }
+    for (const auto &name : localUsers)
+        addUser(name);
 
+    // Build comma-separated result
     std::string result;
-    for (size_t i = 0; i < allUsers.size(); i++)
+    for (size_t i = 0; i < names.size(); i++)
     {
         if (i > 0)
             result += ", ";
-        result += allUsers[i];
+        result += names[i];
     }
     return result;
 }
@@ -1121,6 +1056,26 @@ void controlCommandLoop()
                         }
                     }
                 }
+                else if (type == "ping")
+                {
+                    std::string response = "{\"type\":\"pong\",\"ts\":" + std::to_string(time(nullptr)) + "}";
+                    RDPAgent::ws_send(c, 0x1, response.data(), response.size());
+                }
+                else if (type == "telemetry-request")
+                {
+                    TelemetryData td = collectTelemetry();
+                    std::ostringstream resp;
+                    resp << "{\"type\":\"telemetry\""
+                         << ",\"system\":\"" << jsonEscape(td.system) << "\""
+                         << ",\"user_name\":\"" << jsonEscape(td.userName) << "\""
+                         << ",\"ip_addr\":\"" << td.ipAddr << "\""
+                         << ",\"external_ip\":\"" << td.externalIP << "\""
+                         << ",\"total_memory\":" << td.totalMemory
+                         << ",\"available_memory\":" << td.availableMemory
+                         << "}";
+                    std::string response = resp.str();
+                    RDPAgent::ws_send(c, 0x1, response.data(), response.size());
+                }
             }
         }
 
@@ -1441,50 +1396,11 @@ void mainLogic()
     // Поток мониторинга неактивности (работает независимо от WebSocket)
     std::thread inactivityThread(inactivity_monitor_thread);
 
-    // === HEARTBEAT LOOP ===
+    // === MAIN LOOP (heartbeat/telemetry via WebSocket, only checkForUpdate via HTTP) ===
     log("Entering main loop...");
     while (!g_stopRequested)
     {
-        for (int i = 0; i < 10 && !g_stopRequested; i++)
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-        if (g_stopRequested)
-            break;
-
-        std::string dummy;
-        int code;
-        postJSON(serverURL + "/api/agent/heartbeat?uuid=" + uuid + "&token=" + token,
-                 "{}", dummy, code);
-
-        size_t modePos = dummy.find("\"telemetry_mode\":\"");
-        if (modePos != std::string::npos)
-        {
-            modePos += 18;
-            size_t modeEnd = dummy.find("\"", modePos);
-            if (modeEnd != std::string::npos)
-                g_telemetryMode = dummy.substr(modePos, modeEnd - modePos);
-        }
-
-        if (g_telemetryMode == "full" && !g_stopRequested)
-        {
-            TelemetryData t = collectTelemetry();
-            std::string tb = "{\"system\":\"" + t.system + "\","
-                                                           "\"user_name\":\"" +
-                              jsonEscape(t.userName) + "\","
-                                                       "\"ip_addr\":\"" +
-                              t.ipAddr + "\","
-                                         "\"external_ip\":\"" +
-                              t.externalIP + "\","
-                                             "\"total_memory\":" +
-                              std::to_string(t.totalMemory) + ","
-                                                              "\"available_memory\":" +
-                              std::to_string(t.availableMemory) + ","
-                                                                  "\"exe_version\":\"" +
-                              buildSlug + "\"}";
-            postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token,
-                     tb, dummy, code);
-        }
-
-        for (int i = 0; i < 50 && !g_stopRequested; i++)
+        for (int i = 0; i < 60 && !g_stopRequested; i++)
             std::this_thread::sleep_for(std::chrono::seconds(1));
         if (!g_stopRequested)
             checkForUpdate(uuid, token);

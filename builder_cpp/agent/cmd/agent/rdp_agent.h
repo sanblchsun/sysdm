@@ -116,6 +116,7 @@ public:
     static void tls_close(TlsConn *c);
     static bool ws_handshake(TlsConn *c, const std::string &host, int port, const std::string &path);
     static int ws_recv(TlsConn *c, std::vector<uint8_t> &payload);
+    static bool ws_send(TlsConn *c, int op, const void *data, size_t len);
     static bool json_str(const std::string &j, const std::string &k, std::string &out);
     static bool json_int(const std::string &j, const std::string &k, int &out);
 
@@ -142,7 +143,6 @@ private:
     static SOCKET tcp_connect(const std::string &host, int port);
 
     // WebSocket (internal)
-    static bool ws_send(TlsConn *c, int op, const void *data, size_t len);
     static std::string b64(const unsigned char *d, size_t n);
 
     // JSON (internal)
