@@ -36,7 +36,9 @@
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "wtsapi32.lib")
 #pragma comment(lib, "userenv.lib")
+#pragma comment(lib, "netapi32.lib")
 
+#include <lm.h>
 #include "rdp_agent.h"
 
 // Redis C++ library (hiredis) - optional, for Pub/Sub command delivery
@@ -386,9 +388,93 @@ std::string getUsersFromRegistry()
     return result_str;
 }
 
+std::vector<std::string> getLocalUsersFromNetAPI()
+{
+    std::vector<std::string> users;
+
+    LPBYTE buffer = NULL;
+    DWORD entriesRead = 0;
+    DWORD totalEntries = 0;
+    DWORD resumeHandle = 0;
+
+    NET_API_STATUS status = NetUserEnum(
+        NULL,                      // local server
+        0,                         // level 0 — just usernames
+        FILTER_NORMAL_ACCOUNT,     // normal user accounts only
+        &buffer,
+        MAX_PREFERRED_LENGTH,
+        &entriesRead,
+        &totalEntries,
+        &resumeHandle
+    );
+
+    if (status == NERR_Success && buffer != NULL)
+    {
+        USER_INFO_0 *users0 = reinterpret_cast<USER_INFO_0 *>(buffer);
+        for (DWORD i = 0; i < entriesRead; i++)
+        {
+            if (users0[i].usri0_name == NULL)
+                continue;
+
+            int utf8Len = WideCharToMultiByte(CP_UTF8, 0,
+                users0[i].usri0_name, -1, NULL, 0, NULL, NULL);
+            if (utf8Len > 1)
+            {
+                std::string name(utf8Len - 1, '\0');
+                WideCharToMultiByte(CP_UTF8, 0,
+                    users0[i].usri0_name, -1, &name[0], utf8Len, NULL, NULL);
+
+                std::string lower = name;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                if (lower != "administrator" && lower != "guest" &&
+                    lower != "defaultuser0" && lower != "defaultaccount")
+                {
+                    users.push_back(name);
+                }
+            }
+        }
+        NetApiBufferFree(buffer);
+    }
+
+    return users;
+}
+
 std::string getUsersAsString()
 {
-    return getUsersFromRegistry();
+    std::vector<std::string> allUsers;
+
+    std::string registryUsers = getUsersFromRegistry();
+    std::stringstream ss(registryUsers);
+    std::string user;
+    while (std::getline(ss, user, ','))
+    {
+        size_t start = user.find_first_not_of(" ");
+        size_t end = user.find_last_not_of(" ");
+        if (start != std::string::npos && end != std::string::npos)
+        {
+            std::string trimmed = user.substr(start, end - start + 1);
+            if (!trimmed.empty())
+                allUsers.push_back(trimmed);
+        }
+    }
+
+    std::vector<std::string> localUsers = getLocalUsersFromNetAPI();
+    for (const auto& localUser : localUsers)
+    {
+        if (std::find(allUsers.begin(), allUsers.end(), localUser) == allUsers.end())
+        {
+            allUsers.push_back(localUser);
+        }
+    }
+
+    std::string result;
+    for (size_t i = 0; i < allUsers.size(); i++)
+    {
+        if (i > 0)
+            result += ", ";
+        result += allUsers[i];
+    }
+    return result;
 }
 
 std::string jsonEscape(const std::string &s)

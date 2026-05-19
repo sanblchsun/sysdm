@@ -190,6 +190,7 @@ def build_exe(build_slug: str, server_url: str) -> Path:
         "-lcrypt32",
         "-lwtsapi32",
         "-luserenv",
+        "-lnetapi32",
         "-static",
     ])
 
