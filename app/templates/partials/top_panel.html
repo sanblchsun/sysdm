@@ -1,67 +1,4 @@
 <!-- app/templates/partials/top_panel.html -->
-<script>
-  window.addEventListener("DOMContentLoaded", function () {
-    connectAgentStatusSync();
-  });
-
-  // Real-time agent online/offline status sync via Redis Pub/Sub
-  function connectAgentStatusSync() {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/relay/ws/agent-status-sync`;
-    
-    try {
-      const ws = new WebSocket(wsUrl);
-      
-      ws.onopen = function () {
-        console.log("[status-sync] Connected to agent status updates");
-      };
-      
-      ws.onmessage = function (event) {
-        try {
-          const status = JSON.parse(event.data);
-          const agentUuid = status.uuid;
-          const isOnline = status.is_online;
-          
-          // Find agent row by UUID and update online dot
-          const agentRows = document.querySelectorAll("tr[data-agent-id]");
-          agentRows.forEach((row) => {
-            const rowAgentId = row.dataset.agentId;
-            // Find by UUID in data attribute or by agent UUID if available
-            const uuidMatch = row.querySelector(`input[data-agent-id="${agentUuid}"]`);
-            if (uuidMatch || rowAgentId === agentUuid) {
-              const onlineDot = row.querySelector(".online-dot");
-              if (onlineDot) {
-                if (isOnline) {
-                  onlineDot.classList.remove("offline");
-                  onlineDot.classList.add("online");
-                } else {
-                  onlineDot.classList.remove("online");
-                  onlineDot.classList.add("offline");
-                }
-                console.log(`[status-sync] Agent ${agentUuid}: ${isOnline ? "ONLINE" : "OFFLINE"}`);
-              }
-            }
-          });
-        } catch (e) {
-          console.error("[status-sync] Failed to parse status message:", e);
-        }
-      };
-      
-      ws.onerror = function (error) {
-        console.error("[status-sync] WebSocket error:", error);
-      };
-      
-      ws.onclose = function () {
-        console.log("[status-sync] WebSocket closed, reconnecting in 3s...");
-        // Reconnect after 3 seconds
-        setTimeout(connectAgentStatusSync, 3000);
-      };
-    } catch (e) {
-      console.error("[status-sync] Failed to create WebSocket:", e);
-    }
-  }
-</script>
-
 {% if company %}
 <div class="company-ip-form">
   <form
@@ -92,6 +29,7 @@
     {% for agent in agents %}
     <tr
       data-agent-id="{{ agent.id }}"
+      data-agent-uuid="{{ agent.uuid }}"
       hx-get="/ui/bottom-panel?agent_id={{ agent.id }}"
       hx-target="#bottom-right"
       hx-swap="innerHTML"

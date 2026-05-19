@@ -521,6 +521,18 @@ async def _update_agent_telemetry(aid: str, data: dict):
         pass
 
 
+def _set_keepalive(sock):
+    """Enable TCP keepalive with aggressive timeouts for fast dead-connection detection"""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        # Linux-specific: idle=5s, interval=3s, count=3 → max ~14s to detect dead conn
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 5)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 3)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+    except Exception:
+        pass
+
+
 @router.websocket("/ws/control/agent/{aid}")
 async def ws_control_agent(ws: WebSocket, aid: str):
     await ws.accept()
@@ -528,6 +540,7 @@ async def ws_control_agent(ws: WebSocket, aid: str):
         sock = ws._transport.get_extra_info('socket')  # type: ignore[attr-defined]
         if sock:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            _set_keepalive(sock)
     except Exception:
         pass
     old = HUB.agent_ws.get(aid)
@@ -544,13 +557,20 @@ async def ws_control_agent(ws: WebSocket, aid: str):
         pass
     logger.info(f"[relay] agent connected: {aid} worker={WORKER_ID}")
 
-    # Background task: send ping every 30s
+    # Background task: send ping every 10s for fast dead-connection detection.
+    # First ping is sent immediately (after tiny sleep to let the connection settle)
+    # so online status appears ~instantly once the first pong arrives.
     ping_task = None
     try:
         async def _ping_loop():
+            try:
+                await asyncio.sleep(0.5)
+                await ws.send_text(json.dumps({"type": "ping"}))
+            except Exception:
+                return
             while True:
                 try:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(10)
                     await ws.send_text(json.dumps({"type": "ping"}))
                 except asyncio.CancelledError:
                     break
