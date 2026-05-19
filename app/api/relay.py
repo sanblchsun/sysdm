@@ -539,6 +539,9 @@ async def ws_control_worker(ws: WebSocket, aid: str):
                 if obj.get("type") == "status":
                     # Publish worker status to browsers
                     await PS_MANAGER.publish(f"worker:status:{aid}", msg)
+                elif obj.get("type") == "clipboard":
+                    # Forward clipboard changes from remote desktop to viewers
+                    await PS_MANAGER.publish(f"ctrl:from:{aid}", msg)
             except Exception:
                 pass
     except WebSocketDisconnect:
