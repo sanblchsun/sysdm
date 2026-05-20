@@ -107,6 +107,22 @@
   flex: 1;
 }
 
+/* Encoder capability dots */
+.encoder-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.encoder-dot.ok {
+  background: #3c3;
+}
+.encoder-dot.off {
+  background: #c33;
+}
+
 /* Status icon */
 .status-icon {
   font-size: 1.2em;

@@ -176,6 +176,8 @@ async def register_agent(
     additional.total_memory = data.total_memory
     additional.available_memory = data.available_memory
     additional.external_ip = client_ip
+    if data.encoder_capabilities is not None:
+        additional.encoder_capabilities = data.encoder_capabilities
 
     await session.commit()
 
@@ -204,6 +206,8 @@ async def agent_telemetry(
     additional.total_memory = data.total_memory
     additional.available_memory = data.available_memory
     additional.external_ip = data.external_ip
+    if data.encoder_capabilities is not None:
+        additional.encoder_capabilities = data.encoder_capabilities
 
     # Обновляем exe_version в Agent
     if data.exe_version:

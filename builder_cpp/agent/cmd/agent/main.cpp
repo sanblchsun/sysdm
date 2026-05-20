@@ -28,6 +28,7 @@
 #include <atomic>
 #include <wincrypt.h>
 #include <cstring>
+#include <cstdio>
 #include <tlhelp32.h>
 #include <iphlpapi.h>
 
@@ -97,7 +98,13 @@ std::string getExeDir()
     return (pos != std::string::npos) ? exePath.substr(0, pos) : exePath;
 }
 
-std::string getFFmpegPath() { return getExeDir() + "\\ffmpeg.exe"; }
+std::string getFFmpegPath()
+{
+    std::string path = getExeDir() + "\\ffmpeg.exe";
+    if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+        path = "ffmpeg.exe";  // fallback to PATH
+    return path;
+}
 
 void setupFileLogger(const std::string &name = "agent.log")
 {
@@ -637,11 +644,54 @@ bool getJSON(const std::string &url, std::string &responseBody, int &statusCode)
 
 // ==================== TELEMETRY ====================
 
+std::string getEncoderCapabilities()
+{
+    // Check which H.264 encoders are available via ffmpeg
+    // Returns JSON: {"libx264":true,"h264_amf":false,"h264_qsv":false,"h264_nvenc":false}
+    bool has_libx264 = false, has_amf = false, has_qsv = false, has_nvenc = false;
+    std::string ffmpeg = getFFmpegPath();
+    std::string cmd = "\"" + ffmpeg + "\" -encoders 2>&1";
+    log(("[encoder] ffmpeg path: " + ffmpeg).c_str());
+    log(("[encoder] running: " + cmd).c_str());
+    FILE *pipe = _popen(cmd.c_str(), "r");
+    if (pipe)
+    {
+        char buf[4096];
+        while (fgets(buf, sizeof(buf), pipe))
+        {
+            std::string line(buf);
+            log(("[encoder] line: " + line.substr(0, line.length() - 1)).c_str());
+            if (line.find("libx264") != std::string::npos)
+                has_libx264 = true;
+            if (line.find("h264_amf") != std::string::npos)
+                has_amf = true;
+            if (line.find("h264_qsv") != std::string::npos)
+                has_qsv = true;
+            if (line.find("h264_nvenc") != std::string::npos)
+                has_nvenc = true;
+        }
+        _pclose(pipe);
+    }
+    else
+    {
+        log("[encoder] _popen failed (pipe is null)");
+    }
+    std::string result = "{";
+    result += "\"libx264\":" + std::string(has_libx264 ? "true" : "false") + ",";
+    result += "\"h264_amf\":" + std::string(has_amf ? "true" : "false") + ",";
+    result += "\"h264_qsv\":" + std::string(has_qsv ? "true" : "false") + ",";
+    result += "\"h264_nvenc\":" + std::string(has_nvenc ? "true" : "false");
+    result += "}";
+    log(("[encoder] result: " + result).c_str());
+    return result;
+}
+
 struct TelemetryData
 {
     std::string system, userName, ipAddr, externalIP;
     std::vector<std::string> disks;
     uint64_t totalMemory = 0, availableMemory = 0;
+    std::string encoder_capabilities;  // JSON string
 };
 
 std::string getTotalMemory()
@@ -700,6 +750,7 @@ TelemetryData collectTelemetry()
     data.totalMemory = std::stoull(getTotalMemory());
     data.availableMemory = std::stoull(getAvailableMemory());
     data.disks = getDiskInfo();
+    data.encoder_capabilities = getEncoderCapabilities();
     return data;
 }
 
@@ -1257,6 +1308,7 @@ void controlCommandLoop()
                         resp << td.disks[i];
                     }
                     resp << "]";
+                    resp << ",\"encoder_capabilities\":" << td.encoder_capabilities;
                     resp << "}";
                     std::string response = resp.str();
                     RDPAgent::ws_send(c, 0x1, response.data(), response.size());
@@ -1572,7 +1624,7 @@ void mainLogic()
             if (i > 0) tb += ",";
             tb += t.disks[i];
         }
-        tb += "]}";
+        tb += "],\"encoder_capabilities\":" + t.encoder_capabilities + "}";
         postJSON(serverURL + "/api/agent/telemetry?uuid=" + uuid + "&token=" + token, tb, rb, rc);
     }
 

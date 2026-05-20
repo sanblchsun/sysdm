@@ -280,7 +280,44 @@
             </div>
           </div>
         </div>
-        {% endif %} {% else %}
+        {% endif %}         <hr />
+
+        <nobr class="icon-class icon_encoder"></nobr>
+        <nobr><strong> RDP-режимы:</strong></nobr>
+        <br />
+        {% set encoders = {
+          'mjpeg':   {'label': 'MJPEG',         'always': true},
+          'libx264': {'label': 'H.264 CPU',      'always': false},
+          'h264_amf':  {'label': 'H.264 AMD',    'always': false},
+          'h264_qsv':  {'label': 'H.264 Intel',  'always': false},
+          'h264_nvenc':{'label': 'H.264 NVIDIA', 'always': false},
+        } %}
+        {% if agent.additional_data and agent.additional_data.encoder_capabilities %}
+          {% set caps = agent.additional_data.encoder_capabilities %}
+          {% for key, info in encoders.items() %}
+            {% if key == 'mjpeg' or key in caps %}
+              {% set available = true if info.always else (caps.get(key, false) == true) %}
+              <nobr>&nbsp;&nbsp;
+                <span class="encoder-dot {{ 'ok' if available else 'off' }}"></span>
+                {{ info.label }}
+              </nobr><br />
+            {% endif %}
+          {% endfor %}
+        {% else %}
+          {% for key, info in encoders.items() %}
+            {% if key == 'mjpeg' %}
+              {% set available = true %}
+            {% else %}
+              {% set available = false %}
+            {% endif %}
+            <nobr>&nbsp;&nbsp;
+              <span class="encoder-dot {{ 'ok' if available else 'off' }}"></span>
+              {{ info.label }}
+            </nobr><br />
+          {% endfor %}
+        {% endif %}
+
+        {% else %}
         <h3>Bottom panel</h3>
         <p>Логи / консоль / статус</p>
         <pre style="margin-top: 1rem">

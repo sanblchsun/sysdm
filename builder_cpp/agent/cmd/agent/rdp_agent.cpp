@@ -1201,9 +1201,10 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
         if (enc == "amf")
         {
             int gop = r.framerate * 2;
-            c << " -c:v h264_amf -usage lowlatency -quality balanced -rc vbr_latency"
+            c << " -c:v h264_amf -usage lowlatency -quality speed -rc cbr"
+              << " -pix_fmt nv12"
               << " -b:v " << r.bitrate << " -maxrate " << r.bitrate
-              << " -g " << gop << " -bf 0 -vbaq true -preanalysis true -enforce_hrd true";
+              << " -g " << gop << " -bf 0";
         }
         else if (enc == "qsv")
         {
@@ -1231,6 +1232,7 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
             c << " -bsf:v h264_metadata=aud=insert";
         c << " -f h264 -flush_packets 1 pipe:1";
     }
+    log("[ffmpeg] cmd: " + c.str());
     return c.str();
 }
 

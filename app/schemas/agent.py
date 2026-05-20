@@ -23,6 +23,7 @@ class AgentRegisterIn(BaseModel):
     total_memory: int | None = None
     available_memory: int | None = None
     external_ip: str | None = None
+    encoder_capabilities: dict[str, bool] | None = None
 
 
 class AgentRegisterOut(BaseModel):
@@ -39,6 +40,7 @@ class AgentTelemetryIn(BaseModel):
     available_memory: int | None = None
     external_ip: str | None = None
     exe_version: str | None = None
+    encoder_capabilities: dict[str, bool] | None = None
 
 
 # Schema for UAC control

@@ -126,6 +126,9 @@ class AgentAdditionalData(Base):
     total_memory: Mapped[int | None] = mapped_column(nullable=True)
     available_memory: Mapped[int | None] = mapped_column(nullable=True)
 
+    # ===== Кодеки =====
+    encoder_capabilities: Mapped[dict[str, bool] | None] = mapped_column(JSON, nullable=True)
+
 
 class User(Base):
     __tablename__ = "users"
