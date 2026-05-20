@@ -354,6 +354,8 @@ std::vector<std::string> getLocalUsersFromNetAPI()
     return users;
 }
 
+std::string ansiToUtf8(const std::string &ansi);
+
 std::string getUsersAsString()
 {
     std::vector<std::string> names;
@@ -410,7 +412,7 @@ std::string getUsersAsString()
             if (LookupAccountSidA(NULL, pSid, accountName, &accountNameLen,
                                    domainName, &domainNameLen, &sidUse))
             {
-                addUser(std::string(accountName));
+                addUser(ansiToUtf8(std::string(accountName)));
             }
 
             LocalFree(pSid);
@@ -432,6 +434,20 @@ std::string getUsersAsString()
         result += names[i];
     }
     return result;
+}
+
+std::string ansiToUtf8(const std::string &ansi)
+{
+    if (ansi.empty()) return ansi;
+    int wideLen = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), (int)ansi.size(), NULL, 0);
+    if (wideLen <= 0) return ansi;
+    std::wstring wide(wideLen, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), (int)ansi.size(), &wide[0], wideLen);
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen, NULL, 0, NULL, NULL);
+    if (utf8Len <= 0) return ansi;
+    std::string utf8(utf8Len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen, &utf8[0], utf8Len, NULL, NULL);
+    return utf8;
 }
 
 std::string jsonEscape(const std::string &s)
@@ -463,7 +479,16 @@ std::string jsonEscape(const std::string &s)
             out += "\\t";
             break;
         default:
-            out += c;
+            if (static_cast<unsigned char>(c) < 0x20)
+            {
+                char buf[8];
+                snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                out += buf;
+            }
+            else
+            {
+                out += c;
+            }
         }
     }
     return out;
@@ -752,19 +777,116 @@ std::mutex g_rdp_worker_m;
 // инжектить ввод в окна администратора, Task Manager, regedit и пр.
 //
 // Требует SeTcbPrivilege (LocalSystem имеет).
-static HANDLE GetActiveUserToken()
+static DWORD FindActiveUserSessionId()
 {
+    // Сначала пробуем консоль (локальный вход/физическая консоль)
     DWORD sessionId = WTSGetActiveConsoleSessionId();
-    if (sessionId == 0xFFFFFFFF)
+    if (sessionId != 0xFFFFFFFF && sessionId != 0)
+        return sessionId;
+
+    // Консоль неактивна — перебираем все сессии в поисках активной пользовательской
+    PWTS_SESSION_INFOW pInfo = NULL;
+    DWORD count = 0;
+    if (!WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &pInfo, &count))
+        return 0xFFFFFFFF;
+
+    DWORD result = 0xFFFFFFFF;
+    for (DWORD i = 0; i < count; i++)
     {
+        // Ищем сессию в состоянии WTSActive, не session 0 (системная)
+        if (pInfo[i].State == WTSActive && pInfo[i].SessionId != 0)
+        {
+            result = pInfo[i].SessionId;
+            break;
+        }
+    }
+    WTSFreeMemory(pInfo);
+    return result;
+}
+
+// WTSImpersonateUser может отсутствовать в mingw-заголовках,
+// загружаем через GetProcAddress во время выполнения.
+typedef BOOL (WINAPI *WTSImpersonateUserFn)(HANDLE, DWORD);
+static WTSImpersonateUserFn g_WTSImpersonateUser = NULL;
+
+static bool LoadWTSImpersonateUser()
+{
+    if (g_WTSImpersonateUser) return true;
+    HMODULE hMod = GetModuleHandleA("wtsapi32.dll");
+    if (!hMod) hMod = LoadLibraryA("wtsapi32.dll");
+    if (!hMod) return false;
+    g_WTSImpersonateUser = (WTSImpersonateUserFn)GetProcAddress(hMod, "WTSImpersonateUser");
+    return g_WTSImpersonateUser != NULL;
+}
+
+static HANDLE GetSessionToken(DWORD sessionId)
+{
+    HANDLE hUser = NULL;
+
+    // Метод 1: WTSQueryUserToken (стандартный, работает почти везде)
+    if (WTSQueryUserToken(sessionId, &hUser))
+        return hUser;
+
+    DWORD err = GetLastError();
+    log(std::string("[GetSessionToken] WTSQueryUserToken(session ") +
+        std::to_string(sessionId) + ") failed with error " + std::to_string(err) +
+        " — trying fallback");
+
+    // Метод 2: WTSImpersonateUser + OpenThreadToken (запасной)
+    // На некоторых системах (WS2022 + RDS) WTSQueryUserToken возвращает
+    // ERROR_NO_TOKEN, хотя сессия активна. Этот способ обходит ограничение.
+    if (!LoadWTSImpersonateUser())
+    {
+        log("[GetSessionToken] WTSImpersonateUser API not available");
         return NULL;
     }
 
-    HANDLE hUser = NULL;
-    if (!WTSQueryUserToken(sessionId, &hUser))
+    if (!g_WTSImpersonateUser(WTS_CURRENT_SERVER_HANDLE, sessionId))
     {
+        DWORD err2 = GetLastError();
+        log(std::string("[GetSessionToken] WTSImpersonateUser(session ") +
+            std::to_string(sessionId) + ") failed with error " + std::to_string(err2));
         return NULL;
     }
+
+    HANDLE hImp = NULL;
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY, FALSE, &hImp))
+    {
+        DWORD err2 = GetLastError();
+        log(std::string("[GetSessionToken] OpenThreadToken failed with error ") +
+            std::to_string(err2));
+        RevertToSelf();
+        return NULL;
+    }
+
+    if (!DuplicateTokenEx(hImp, MAXIMUM_ALLOWED, NULL,
+                          SecurityImpersonation, TokenPrimary, &hUser))
+    {
+        DWORD err2 = GetLastError();
+        log(std::string("[GetSessionToken] DuplicateTokenEx(imp) failed with error ") +
+            std::to_string(err2));
+        CloseHandle(hImp);
+        RevertToSelf();
+        return NULL;
+    }
+
+    CloseHandle(hImp);
+    RevertToSelf();
+    return hUser;
+}
+
+static HANDLE GetActiveUserToken()
+{
+    DWORD sessionId = FindActiveUserSessionId();
+    if (sessionId == 0xFFFFFFFF)
+    {
+        log("[GetActiveUserToken] no active user session found");
+        return NULL;
+    }
+
+    HANDLE hUser = GetSessionToken(sessionId);
+    if (!hUser)
+        return NULL;
 
     DWORD sz = 0;
     TOKEN_ELEVATION_TYPE et = TokenElevationTypeDefault;
@@ -785,6 +907,9 @@ static HANDLE GetActiveUserToken()
     if (!DuplicateTokenEx(hUser, MAXIMUM_ALLOWED, NULL,
                           SecurityImpersonation, TokenPrimary, &hPrimary))
     {
+        DWORD err = GetLastError();
+        log(std::string("[GetActiveUserToken] DuplicateTokenEx failed with error ") +
+            std::to_string(err));
         CloseHandle(hUser);
         return NULL;
     }
@@ -892,6 +1017,8 @@ bool spawnRDPWorker()
 
     if (!ok)
     {
+        log(std::string("[spawnRDPWorker] CreateProcessAsUserA failed with error ") +
+            std::to_string(err));
         return false;
     }
 
@@ -1359,20 +1486,24 @@ void mainLogic()
 
     std::string machineUID = loadOrCreateMachineUID();
 
-    char hostname[256];
-    DWORD size = sizeof(hostname);
-    GetComputerNameA(hostname, &size);
+    char hostnameA[256];
+    DWORD size = sizeof(hostnameA);
+    GetComputerNameA(hostnameA, &size);
+    std::string hostname = ansiToUtf8(std::string(hostnameA));
 
     std::string uuid, token;
 
     // === REGISTRATION ===
     for (;;)
     {
-        if (g_stopRequested)
+        log("Registering agent...");
+        if (g_stopRequested) {
+            log("Stop requested, aborting registration");
             return;
+        }
         std::string url = serverURL + "/api/agent/register";
         TelemetryData td = collectTelemetry();
-        std::string body = "{\"name_pc\":\"" + jsonEscape(std::string(hostname)) + "\","
+        std::string body = "{\"name_pc\":\"" + jsonEscape(hostname) + "\","
                                                                                     "\"machine_uid\":\"" +
                            jsonEscape(machineUID) + "\","
                                                      "\"system\":\"" +
@@ -1388,6 +1519,7 @@ void mainLogic()
         postJSON(url, body, responseBody, statusCode);
         if (statusCode == 200)
         {
+            log("Registration successful");
             size_t uuidPos = responseBody.find("\"agent_uuid\":\"");
             size_t tokenPos = responseBody.find("\"token\":\"");
             if (uuidPos != std::string::npos && tokenPos != std::string::npos)
@@ -1404,11 +1536,14 @@ void mainLogic()
                 }
             }
         }
+        log("Registration failed, retrying in 10 seconds...");
         for (int i = 0; i < 10 && !g_stopRequested; i++)
             std::this_thread::sleep_for(std::chrono::seconds(1));
     }
-    if (g_stopRequested)
+    if (g_stopRequested) {
+        log("Stop requested, aborting registration");
         return;
+    }
 
     // === RECOVER FROM CRASH DURING LOGIN-USER ===
     recover_pending_login_state();
