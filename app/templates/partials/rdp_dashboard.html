@@ -527,11 +527,22 @@
         const codes = findStartCodes(data);
         if (codes.length < 2) return;
         const boundaries = [];
-        for (let k = 0; k < codes.length; k++) {
-          const cc = codes[k];
-          const t = nalType(data[cc.pos + cc.len]);
-          if (t === 9) boundaries.push(cc.pos);
-          else if (t === 7 && boundaries.length === 0) boundaries.push(cc.pos);
+        const hasAUD = codes.some(cc => nalType(data[cc.pos + cc.len]) === 9);
+        if (hasAUD) {
+          for (let k = 0; k < codes.length; k++) {
+            const cc = codes[k];
+            const t = nalType(data[cc.pos + cc.len]);
+            if (t === 9) boundaries.push(cc.pos);
+            else if (t === 7 && boundaries.length === 0) boundaries.push(cc.pos);
+          }
+        } else {
+          for (let k = 0; k < codes.length; k++) {
+            const cc = codes[k];
+            const t = nalType(data[cc.pos + cc.len]);
+            if (t === 1) boundaries.push(cc.pos);
+          }
+          if (boundaries.length === 0) return;
+          if (boundaries[0] !== 0) boundaries.unshift(0);
         }
         if (boundaries.length < 2) return;
         for (let i = 0; i < boundaries.length - 1; i++) {

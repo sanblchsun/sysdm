@@ -1201,8 +1201,8 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
         if (enc == "amf")
         {
             int gop = r.framerate * 2;
-            c << " -c:v h264_amf -usage lowlatency -quality speed -rc cbr"
-              << " -pix_fmt nv12"
+            c << " -pix_fmt nv12"
+              << " -c:v h264_amf -usage lowlatency -quality speed -rc cbr"
               << " -b:v " << r.bitrate << " -maxrate " << r.bitrate
               << " -g " << gop << " -bf 0";
         }
@@ -1228,7 +1228,10 @@ std::string RDPAgent::build_ffmpeg_cmd(const RDPConfig &base, const RDPRuntime &
               << " -x264-params \"nal-hrd=cbr:force-cfr=1:aud=1:"
                  "scenecut=0:rc-lookahead=0:sync-lookahead=0:aq-mode=1\"";
         }
-        if (enc != "cpu")
+        // h264_metadata=aud=insert BSF is incompatible with h264_amf output
+        // (produces only AUD NALs, stripping all slice data). Only apply to
+        // encoders that have proper BSF support.
+        if (enc != "cpu" && enc != "amf")
             c << " -bsf:v h264_metadata=aud=insert";
         c << " -f h264 -flush_packets 1 pipe:1";
     }

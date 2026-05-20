@@ -60,6 +60,7 @@
       // ========= CONTROL (mouse + keyboard + clipboard) =========
       let ctrlWs = null;
       let agentScreen = null;
+      let videoSize = null;
       let lastMove = 0;
       const MOUSE_MOVE_HZ = 100;
       let clipboardPermissionGranted = false;
@@ -133,6 +134,10 @@
       // ---- mouse ----
       function mapToScreen(el, clientX, clientY, mediaW, mediaH) {
         if (!mediaW || !mediaH) return null;
+        if (!videoSize && !agentScreen) return null;
+        const wx = videoSize ? videoSize.w : (agentScreen ? agentScreen.w : 0);
+        const hx = videoSize ? videoSize.h : (agentScreen ? agentScreen.h : 0);
+        if (!wx || !hx) return null;
         const rect = el.getBoundingClientRect();
         const lx = clientX - rect.left,
           ly = clientY - rect.top;
@@ -154,13 +159,11 @@
         const xi = lx - oX,
           yi = ly - oY;
         if (xi < 0 || yi < 0 || xi > dW || yi > dH) return null;
-        const sW = agentScreen ? agentScreen.w : mediaW;
-        const sH = agentScreen ? agentScreen.h : mediaH;
-        const x = Math.round((xi / dW) * sW);
-        const y = Math.round((yi / dH) * sH);
+        const x = Math.round((xi / dW) * wx);
+        const y = Math.round((yi / dH) * hx);
         return {
-          x: Math.max(0, Math.min(sW - 1, x)),
-          y: Math.max(0, Math.min(sH - 1, y)),
+          x: Math.max(0, Math.min(wx - 1, x)),
+          y: Math.max(0, Math.min(hx - 1, y)),
         };
       }
       function attachMouse(el, getSize) {
@@ -371,11 +374,16 @@
           `${proto}://${location.host}/relay/ws/stream/h264/${encodeURIComponent(id)}`,
         );
         ws.binaryType = "arraybuffer";
+        ws.onopen = () => console.log("[h264] ws connected");
         ws.onerror = () => showErr("WebSocket error");
         ws.onmessage = (ev) => {
           const add = new Uint8Array(ev.data);
           bytes += add.length;
-          if (add.length === 0) return;
+          if (add.length === 0) {
+            console.log("[h264] ws empty message");
+            return;
+          }
+          console.log("[h264] ws got", add.length, "bytes, pos=", pos, "base=", base);
           if (pos + add.length > buf.length) {
             if (base > 0) {
               const remaining = pos - base;
@@ -421,15 +429,32 @@
           if (len < 8) return;
           const data = buf.subarray(base, pos);
           const codes = findStartCodes(data);
-          if (codes.length < 2) return;
-          const boundaries = [];
-          for (let k = 0; k < codes.length; k++) {
-            const c = codes[k];
-            const t = nalType(data[c.pos + c.len]);
-            if (t === 9) boundaries.push(c.pos);
-            else if (t === 7 && boundaries.length === 0) boundaries.push(c.pos);
+          if (codes.length < 2) {
+            console.log("[h264] <2 start codes in", len, "bytes");
+            return;
           }
-          if (boundaries.length < 2) return;
+          const boundaries = [];
+          const hasAUD = codes.some(c => nalType(data[c.pos + c.len]) === 9);
+          if (hasAUD) {
+            for (let k = 0; k < codes.length; k++) {
+              const c = codes[k];
+              const t = nalType(data[c.pos + c.len]);
+              if (t === 9) boundaries.push(c.pos);
+              else if (t === 7 && boundaries.length === 0) boundaries.push(c.pos);
+            }
+          } else {
+            for (let k = 0; k < codes.length; k++) {
+              const c = codes[k];
+              const t = nalType(data[c.pos + c.len]);
+              if (t === 1) boundaries.push(c.pos);
+            }
+            if (boundaries.length === 0) return;
+            if (boundaries[0] !== 0) boundaries.unshift(0);
+          }
+          if (boundaries.length < 2) {
+            console.log("[h264] <2 boundaries (", boundaries.length, ") from", codes.length, "codes, waiting for more data");
+            return;
+          }
           for (let i = 0; i < boundaries.length - 1; i++) {
             const au = data.subarray(boundaries[i], boundaries[i + 1]);
             handleAU(au);
@@ -469,13 +494,16 @@
         async function initDecoder(keyAUCopy) {
           initInFlight = true;
           const codec = codecStringFromSPS(keyAUCopy);
+          console.log("[h264] initDecoder codec=", codec, "size=", keyAUCopy.length);
           try {
             const cfg = await pickDecoderConfig(codec);
             if (!cfg) {
               showErr(`Нет поддерживаемой конфигурации для ${codec}`);
+              console.log("[h264] no supported config for", codec);
               initInFlight = false;
               return;
             }
+            console.log("[h264] decoder config:", JSON.stringify(cfg));
             const dec = new VideoDecoder({
               output: onFrame,
               error: (e) => {
@@ -508,7 +536,10 @@
         function handleAU(au) {
           const hasIDR = findNALU(au, 5) >= 0;
           const hasP = findNALU(au, 1) >= 0;
-          if (!hasIDR && !hasP) return;
+          if (!hasIDR && !hasP) {
+            console.log("[h264] AU skipped: no IDR nor P, size=", au.length);
+            return;
+          }
           const isKey = hasIDR;
           if (!decoder) {
             if (!isKey || initInFlight) return;
@@ -537,6 +568,8 @@
           if (canvas.width !== frame.displayWidth) {
             canvas.width = frame.displayWidth;
             canvas.height = frame.displayHeight;
+            videoSize = { w: frame.displayWidth, h: frame.displayHeight };
+            console.log("[h264] canvas resized to", frame.displayWidth, "x", frame.displayHeight);
           }
           ctx.drawImage(frame, 0, 0);
           frame.close();
@@ -568,7 +601,7 @@
           box.innerHTML = `<canvas id="media"></canvas>`;
           const cv = document.getElementById("media");
           startH264(cv);
-          attachMouse(cv, () => ({ w: cv.width, h: cv.height }));
+          attachMouse(cv, () => videoSize || { w: cv.width, h: cv.height });
         }
       }
 
